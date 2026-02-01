@@ -1,10 +1,10 @@
 import arcade
 import random
-from player import Player
-from dungeon import Floor
-from enemy import *
-from boss import *
-from settings import *
+from src.player import Player
+from src.dungeon import Floor
+from src.enemy import *
+from src.boss import *
+from src.settings import *
 
 class GameWindow(arcade.Window):
     def __init__(self):

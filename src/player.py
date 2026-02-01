@@ -1,5 +1,5 @@
 import arcade
-from settings import PLAYER_HP, PLAYER_SCALE, PLAYER_SPEED
+from src.settings import PLAYER_HP, PLAYER_SCALE, PLAYER_SPEED
 
 
 class Player:

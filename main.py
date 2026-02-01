@@ -1,6 +1,6 @@
 # main.py
 import arcade
-from window import GameWindow
+from src.window import GameWindow
 
 
 def main():

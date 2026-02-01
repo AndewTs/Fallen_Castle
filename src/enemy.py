@@ -2,7 +2,7 @@
 import arcade
 import math
 import random
-from settings import ENEMY_SCALE, ENEMY_HP, ENEMY_SPEED, ARROW_SPEED
+from src.settings import ENEMY_SCALE, ENEMY_HP, ENEMY_SPEED, ARROW_SPEED
 
 
 class Enemy:

@@ -1,8 +1,8 @@
 import arcade
 import math
 import random
-from settings import BOSS_HP, BOSS_SCALE, BOSS_SPEED
-from enemy import Enemy, TankEnemy
+from src.settings import BOSS_HP, BOSS_SCALE, BOSS_SPEED
+from src.enemy import Enemy, TankEnemy
 
 
 class Boss(Enemy):

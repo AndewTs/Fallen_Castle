@@ -1,6 +1,6 @@
 import random
-from settings import *
-from room import Room
+from src.settings import *
+from src.room import Room
 
 
 class Floor:
