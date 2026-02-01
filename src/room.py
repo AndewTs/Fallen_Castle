@@ -1,4 +1,3 @@
-# room.py
 import random
 
 class Room:
@@ -36,4 +35,3 @@ class Room:
 
     def add_forbidden_zone(self, x, y, radius):
         self.forbidden_zones.append((x, y, radius))
-

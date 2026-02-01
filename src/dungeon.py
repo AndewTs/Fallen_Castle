@@ -1,11 +1,13 @@
-from room import Room
 import random
-from settings import ROOM_GRID_SIZE, DIRECTIONS, SCREEN_HEIGHT, SCREEN_WIDTH
+from settings import *
+from room import Room
 
 
 class Floor:
-    def __init__(self, size=ROOM_GRID_SIZE):
-        self.size = size
+    def __init__(self, floor_number=1):
+        self.floor_number = floor_number
+        self.size = BASE_FLOOR_SIZE + (floor_number - 1)
+        size = self.size
         self.rooms = {}  # dict[(x,y)] = Room
         self.start_pos = (0, 0)
         self.boss_pos = (size - 1, size - 1)
@@ -67,4 +69,3 @@ class Floor:
             self.current_pos = pos
             return True
         return False
-

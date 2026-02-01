@@ -1,566 +1,236 @@
 import arcade
-import time
-import random
 import math
-from dataclasses import dataclass
-from typing import List, Dict, Optional, Tuple
-from enum import Enum
+import random
 
-# ============== ИЗМЕНЕНО: ОБЩИЕ КОНСТАНТЫ ==============
-# Используем разрешение для окна 1024x768
-SCREEN_WIDTH = 1024
-SCREEN_HEIGHT = 768
-SCREEN_TITLE = "Fallen Castle"
+# ================= НАСТРОЙКИ =================
+SCREEN_WIDTH = 1280
+SCREEN_HEIGHT = 720
+SCREEN_TITLE = "Pixel Dungeon — MVP with Treasure"
 
-PIXEL = 4  # Уменьшен размер пикселя для отрисовки (чтобы лучше вписывалось)
+PLAYER_SPEED = 320
+PLAYER_HP = 400
+PLAYER_SCALE = 7
 
-BOSS_MATRIX = [
-    "001111100",
-    "011111110",
-    "1110110111",
-    "1111111111",
-    "1111111111",
-    "011111110",
-    "001111100",
-]
+ENEMY_SCALE = 6
+ENEMY_HP = 100
+ENEMY_SPEED = 140
 
-HEART_MATRIX = [
-    "0100010",
-    "1110111",
-    "1111111",
-    "0111110",
-    "0011100",
-    "0001000",
-]
+BOSS_SCALE = 0.09
+BOSS_HP = 1000
+BOSS_SPEED = 110
 
-# Цвета для меню
-BUTTON_NORMAL = (87, 76, 41)
-BUTTON_HOVER = (128, 112, 61)
-BUTTON_PRESSED = (107, 92, 44)
-TEXT_COLOR = (255, 255, 255, 255)
-BUTTON_BORDER = (130, 114, 62)
-UI_BACKGROUND = (40, 40, 40, 200)
+PIXEL = 6  # used for pixel-draw heart etc (optional)
 
-# Размеры тайлов для стен и препятствий
-WALL_TILE = 48  # Уменьшено для меньшего окна
-OBSTACLE_SCALE = 4.0  # Уменьшено
+SWORD_LENGTH = 100
+SWORD_THICKNESS = 5
+SWORD_TIME = 0.12
 
-# Типы комнат
-class RoomType(Enum):
-    START = "start"
-    NORMAL = "normal"
-    BOSS = "boss"
+MAX_FLOORS = 3
+BASE_FLOOR_SIZE = 3
 
-# ============== Утилита отрисовки пикселей ==============
-def draw_pixel_matrix(matrix, x, y, color):
-    for r, row in enumerate(matrix):
-        for c, cell in enumerate(row):
-            if cell == "1":
-                left = x + c * PIXEL
-                bottom = y - (r + 1) * PIXEL
-                arcade.draw_lbwh_rectangle_filled(left, bottom, PIXEL, PIXEL, color)
+ROOM_GRID_SIZE = 3  # size x size rooms
 
-# ============== КЛАСС КОМНАТЫ ==============
+# door directions
+DIRECTIONS = {
+    "up": (0, 1),
+    "down": (0, -1),
+    "left": (-1, 0),
+    "right": (1, 0)
+}
+
+OPPOSITE = {
+    "up": "down",
+    "down": "up",
+    "left": "right",
+    "right": "left"
+}
+
+# chance that a cleared normal room drops a key (0..1)
+KEY_DROP_CHANCE = 0.25
+
+# wall tile
+WALL_TILE = 64
+
+# projectile speed for bow
+ARROW_SPEED = 700.0
+
+HALBERD_RADIUS = 200
+HALBERD_ARC_ANGLE = 65  # градусов
+HALBERD_DAMAGE = 100
+HALBERD_TIME = 0.22
+HALBERD_COOLDOWN = 0.45
+
+HAMMER_RADIUS = 140
+HAMMER_DAMAGE = 180
+HAMMER_TIME = 0.18
+HAMMER_COOLDOWN = 0.75
+HAMMER_WINDUP = 0.25     # задержка перед ударом
+HAMMER_IMPACT = 0.15    # вспышка удара
+HAMMER_SHAKE = 8        # сила тряски экрана
+HAMMER_STUN_TIME = 1.2
+HAMMER_BOSS_SLOW_MULT = 0.5   # 50% скорости
+HAMMER_BOSS_SLOW_TIME = 2.5  # секунды
+
+
+
+# ====================== HELPERS ======================
+def distance(a, b):
+    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+# ====================== ROOM & FLOOR ======================
 class Room:
     def __init__(self, pos, room_type="normal"):
+        """
+        pos: (x, y) tuple
+        room_type: "start", "normal", "boss", "treasure"
+        """
         self.pos = pos
         self.type = room_type
-        self.doors = {}  # направление: (x, y) позиция в сетке
-        self.enemy_spawns = []
-        self.forbidden_zones = []
-        
-        if self.type == RoomType.START:
-            enemy_count = 0
-        elif self.type == RoomType.BOSS:
-            enemy_count = 0  # Босс будет добавлен отдельно
+        self.doors = {}  # filled by Floor: {"up": (x,y), ...}
+        self.enemy_spawns = []  # list of dicts {"type":"enemy","x":int,"y":int}
+        self.walls = []  # optional positions of obstacles (not sprites)
+        self.forbidden_zones = []  # list of (x,y,radius)
+        self.treasure_unlocked = False  # for treasure rooms
+
+        # enemy count by type
+        if self.type == "start":
+            cnt = 0
+        elif self.type == "boss":
+            cnt = 0
+        elif self.type == "treasure":
+            cnt = 0
         else:
-            enemy_count = random.randint(2, 4)  # Уменьшено количество врагов
-        
-        for _ in range(enemy_count):
-            self.enemy_spawns.append({"type": "enemy", "x": None, "y": None, "hp": None})
-    
+            cnt = random.randint(2, 4)
+
+        # generate spawns (positions will be used when loading)
+        for _ in range(cnt):
+            ex = random.randint(200, 1080)
+            ey = random.randint(220, 620)
+            self.enemy_spawns.append({"type": "enemy", "x": ex, "y": ey, "hp": None})
+
     def set_doors(self, doors_dict):
         self.doors = doors_dict
-    
+
     def add_forbidden_zone(self, x, y, radius):
         self.forbidden_zones.append((x, y, radius))
 
-# ============== КЛАСС ЭТАЖА ==============
+
 class Floor:
-    def __init__(self, floor_number, size=3):
+    def __init__(self, floor_number=1):
         self.floor_number = floor_number
-        self.size = size
-        self.rooms = {}
+        self.size = BASE_FLOOR_SIZE + (floor_number - 1)
+        size = self.size
+        self.rooms = {}  # dict[(x,y)] = Room
         self.start_pos = (0, 0)
         self.boss_pos = (size - 1, size - 1)
         self.current_pos = self.start_pos
+        self.treasure_pos = None
         self.generate()
-    
+
     def generate(self):
-        # Создаем комнаты
+        # create rooms
         for x in range(self.size):
             for y in range(self.size):
                 pos = (x, y)
                 if pos == self.start_pos:
-                    room_type = RoomType.START
+                    r = Room(pos, "start")
                 elif pos == self.boss_pos:
-                    room_type = RoomType.BOSS
+                    r = Room(pos, "boss")
                 else:
-                    room_type = RoomType.NORMAL
-                
-                room = Room(pos, room_type)
-                self.rooms[pos] = room
-        
-        # Создаем связи между комнатами (двери)
-        directions = {
-            "up": (0, 1),
-            "down": (0, -1),
-            "left": (-1, 0),
-            "right": (1, 0)
-        }
-        
-        for (x, y), room in self.rooms.items():
+                    r = Room(pos, "normal")
+                self.rooms[pos] = r
+
+        # pick one random normal room to be treasure (not start, not boss)
+        normal_positions = [p for p, r in self.rooms.items() if r.type == "normal"]
+        if normal_positions:
+            tp = random.choice(normal_positions)
+            self.rooms[tp].type = "treasure"
+            self.rooms[tp].treasure_unlocked = False
+            self.treasure_pos = tp
+
+        # connect doors (4-neighbors)
+        for (x, y), room in list(self.rooms.items()):
             doors = {}
-            for name, (dx, dy) in directions.items():
+            for name, (dx, dy) in DIRECTIONS.items():
                 npos = (x + dx, y + dy)
                 if npos in self.rooms:
                     doors[name] = npos
             room.set_doors(doors)
-            
-            # Добавляем запретные зоны вокруг дверей
-            DOOR_MARGIN = 100  # Уменьшено
-            if "up" in doors:
-                room.add_forbidden_zone(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 60, DOOR_MARGIN)
-            if "down" in doors:
-                room.add_forbidden_zone(SCREEN_WIDTH // 2, 60, DOOR_MARGIN)
-            if "left" in doors:
-                room.add_forbidden_zone(60, SCREEN_HEIGHT // 2, DOOR_MARGIN)
-            if "right" in doors:
-                room.add_forbidden_zone(SCREEN_WIDTH - 60, SCREEN_HEIGHT // 2, DOOR_MARGIN)
-            
-            # Стартовая позиция игрока
-            if room.type == RoomType.START:
-                room.add_forbidden_zone(SCREEN_WIDTH // 2, 140, 150)  # Уменьшено
-    
+
+        # Add forbidden zones for doors & start
+        SCREEN_W = SCREEN_WIDTH
+        SCREEN_H = SCREEN_HEIGHT
+        DOOR_MARGIN = 140
+        for (x, y), room in self.rooms.items():
+            if "up" in room.doors:
+                room.add_forbidden_zone(SCREEN_W // 2, SCREEN_H - 80, DOOR_MARGIN)
+            if "down" in room.doors:
+                room.add_forbidden_zone(SCREEN_W // 2, 80, DOOR_MARGIN)
+            if "left" in room.doors:
+                room.add_forbidden_zone(80, SCREEN_H // 2, DOOR_MARGIN)
+            if "right" in room.doors:
+                room.add_forbidden_zone(SCREEN_W - 80, SCREEN_H // 2, DOOR_MARGIN)
+            if room.type == "start":
+                room.add_forbidden_zone(SCREEN_W // 2, 190, 200)
+
     def get_current_room(self):
         return self.rooms[self.current_pos]
-    
-    def move(self, direction):
-        current_room = self.get_current_room()
-        if direction in current_room.doors:
-            self.current_pos = current_room.doors[direction]
+
+    def move(self, pos):
+        if pos in self.rooms:
+            self.current_pos = pos
             return True
         return False
 
-# ============== ОКНО СЮЖЕТА ==============
-class StoryView(arcade.View):
-    def __init__(self, previous_view):
-        super().__init__()
-        self.previous_view = previous_view
-        self.button_list = []
-        self.hovered_button = None
-        self.pressed_button = None
-        self.current_page = 0
-        self.pages = [
-            {
-                "title": "ПРОЛОГ",
-                "content": [
-                    "Пробудившись ото сна длиною в тысячелетие,",
-                    "отважный рыцарь обнаружил себя",
-                    "в древних стенах забытого замка.",
-                    "Память была пуста, и лишь зовущее эхо прошлого",
-                    "вело его сквозь сумрак коридоров,",
-                    "чтобы восстановить нить событий."
-                ]
-            },
-            {
-                "title": "ГЛАВА 1: КРЕПОСТНАЯ СТЕНА",
-                "content": [
-                    "Первый этаж, крепостная стена.",
-                    "Здесь рыцарь встречает первых врагов.",
-                    "Он должен пройти через все комнаты,",
-                    "чтобы найти путь в цитадель."
-                ]
-            },
-            {
-                "title": "ГЛАВА 2: ЦИТАДЕЛЬ",
-                "content": [
-                    "Второй этаж, цитадель.",
-                    "Здесь враги становятся сильнее,",
-                    "а комнаты - больше.",
-                    "Рыцарь должен быть осторожен."
-                ]
-            },
-            {
-                "title": "ГЛАВА 3: ПОДЗЕМЕЛЬЕ",
-                "content": [
-                    "Третий этаж, подземелье.",
-                    "Самое опасное место в замке.",
-                    "Здесь обитает могущественный босс,",
-                    "которого нужно победить, чтобы завершить историю."
-                ]
-            }
-        ]
-        
-    def setup(self):
-        # Кнопка "НАЗАД"
-        back_button = {
-            "x": 30,
-            "y": 30,
-            "width": 150,
-            "height": 40,
-            "text": "НАЗАД",
-            "action": "back"
-        }
-        self.button_list.append(back_button)
-        
-        # Кнопка "ПРЕДЫДУЩАЯ"
-        prev_button = {
-            "x": SCREEN_WIDTH // 2 - 180,
-            "y": 80,
-            "width": 160,
-            "height": 40,
-            "text": "ПРЕДЫДУЩАЯ",
-            "action": "prev"
-        }
-        self.button_list.append(prev_button)
-        
-        # Кнопка "СЛЕДУЮЩАЯ"
-        next_button = {
-            "x": SCREEN_WIDTH // 2 + 20,
-            "y": 80,
-            "width": 160,
-            "height": 40,
-            "text": "СЛЕДУЮЩАЯ",
-            "action": "next"
-        }
-        self.button_list.append(next_button)
-        
-    def on_draw(self):
-        self.clear()
-        
-        # Фон на весь экран
-        arcade.draw_rect_filled(
-            arcade.rect.XYWH(
-                SCREEN_WIDTH // 2, 
-                SCREEN_HEIGHT // 2, 
-                SCREEN_WIDTH, 
-                SCREEN_HEIGHT
-            ),
-            (20, 20, 40)
-        )
-        
-        # Текущая страница
-        page = self.pages[self.current_page]
-        
-        # Заголовок
-        arcade.draw_text(
-            page["title"], 
-            SCREEN_WIDTH // 2, 
-            SCREEN_HEIGHT - 70,
-            (255, 215, 0),
-            36,
-            anchor_x="center",
-            anchor_y="center",
-            font_name=("Arial", "arial"),
-            bold=True
-        )
-        
-        # Содержание
-        y_pos = SCREEN_HEIGHT - 140
-        for line in page["content"]:
-            arcade.draw_text(
-                line,
-                SCREEN_WIDTH // 2,
-                y_pos,
-                (220, 220, 220),
-                24,
-                anchor_x="center",
-                anchor_y="center",
-                font_name=("Arial", "arial")
-            )
-            y_pos -= 35
-        
-        # Номер страницы
-        arcade.draw_text(
-            f"Страница {self.current_page + 1} из {len(self.pages)}",
-            SCREEN_WIDTH // 2,
-            150,
-            (200, 200, 200),
-            22,
-            anchor_x="center",
-            anchor_y="center",
-            font_name=("Arial", "arial")
-        )
-        
-        # Отрисовка кнопок
-        for button in self.button_list:
-            # Определяем цвет кнопки
-            if self.pressed_button == button:
-                color = BUTTON_PRESSED
-            elif self.hovered_button == button:
-                color = BUTTON_HOVER
-            else:
-                color = BUTTON_NORMAL
-            
-            # Рисуем кнопку
-            arcade.draw_rect_filled(
-                arcade.rect.XYWH(
-                    button["x"] + button["width"] // 2,
-                    button["y"] + button["height"] // 2,
-                    button["width"],
-                    button["height"]
-                ),
-                color
-            )
-            
-            # Рамка кнопки
-            arcade.draw_rect_outline(
-                arcade.rect.XYWH(
-                    button["x"] + button["width"] // 2,
-                    button["y"] + button["height"] // 2,
-                    button["width"],
-                    button["height"]
-                ),
-                BUTTON_BORDER,
-                2
-            )
-            
-            # Текст кнопки
-            arcade.draw_text(
-                button["text"],
-                button["x"] + button["width"] // 2,
-                button["y"] + button["height"] // 2,
-                TEXT_COLOR,
-                18,
-                anchor_x="center",
-                anchor_y="center",
-                font_name=("Arial", "arial"),
-                bold=True
-            )
-    
-    def on_mouse_motion(self, x, y, dx, dy):
-        self.hovered_button = None
-        for button in self.button_list:
-            if (button["x"] <= x <= button["x"] + button["width"] and 
-                button["y"] <= y <= button["y"] + button["height"]):
-                self.hovered_button = button
-                break
-    
-    def on_mouse_press(self, x, y, button, modifiers):
-        self.pressed_button = None
-        for btn in self.button_list:
-            if (btn["x"] <= x <= btn["x"] + btn["width"] and 
-                btn["y"] <= y <= btn["y"] + btn["height"]):
-                self.pressed_button = btn
-                break
-    
-    def on_mouse_release(self, x, y, button, modifiers):
-        if self.pressed_button:
-            for btn in self.button_list:
-                if (btn["x"] <= x <= btn["x"] + btn["width"] and 
-                    btn["y"] <= y <= btn["y"] + btn["height"] and 
-                    btn == self.pressed_button):
-                    
-                    if btn["action"] == "back":
-                        # Возвращаемся к предыдущему экрану
-                        self.window.show_view(self.previous_view)
-                    
-                    elif btn["action"] == "prev":
-                        if self.current_page > 0:
-                            self.current_page -= 1
-                    
-                    elif btn["action"] == "next":
-                        if self.current_page < len(self.pages) - 1:
-                            self.current_page += 1
-                    
-                    break
-        
-        self.pressed_button = None
-    
-    def on_key_press(self, key, modifiers):
-        if key == arcade.key.ESCAPE:
-            # Возврат к предыдущему экрану
-            self.window.show_view(self.previous_view)
-        elif key == arcade.key.LEFT:
-            if self.current_page > 0:
-                self.current_page -= 1
-        elif key == arcade.key.RIGHT:
-            if self.current_page < len(self.pages) - 1:
-                self.current_page += 1
-
-# ============== ИНТРО-ЭКРАН ДЛЯ ПЕРВОГО УРОВНЯ ==============
-class IntroView(arcade.View):
-    def __init__(self, floor_number):
-        super().__init__()
-        self.floor_number = floor_number
-        self.button_list = []
-        self.hovered_button = None
-        self.pressed_button = None
-        
-    def setup(self):
-        # Создаем кнопку "ПРОДОЛЖИТЬ"
-        continue_button = {
-            "x": SCREEN_WIDTH // 2 - 120,
-            "y": 80,
-            "width": 240,
-            "height": 50,
-            "text": "ПРОДОЛЖИТЬ",
-            "action": "continue"
-        }
-        self.button_list.append(continue_button)
-        
-    def on_draw(self):
-        self.clear()
-        
-        # Черный фон на весь экран
-        arcade.draw_rect_filled(
-            arcade.rect.XYWH(
-                SCREEN_WIDTH // 2, 
-                SCREEN_HEIGHT // 2, 
-                SCREEN_WIDTH, 
-                SCREEN_HEIGHT
-            ),
-            (0, 0, 0)
-        )
-        
-        # Текст интро (разделенный на строки)
-        intro_text_lines = [
-            "Пробудившись ото сна длиною в тысячелетие,",
-            "отважный рыцарь обнаружил себя",
-            "в древних стенах забытого замка.",
-            "Память была пуста, и лишь зовущее эхо прошлого",
-            "вело его сквозь сумрак коридоров,",
-            "чтобы восстановить нить событий."
-        ]
-        
-        # Рисуем текст интро по центру экрана
-        y_pos = SCREEN_HEIGHT // 2 + 60
-        for i, line in enumerate(intro_text_lines):
-            arcade.draw_text(
-                line,
-                SCREEN_WIDTH // 2,
-                y_pos - i * 30,
-                (255, 255, 255),
-                20,
-                anchor_x="center",
-                anchor_y="center",
-                font_name=("Arial", "arial"),
-                bold=(i == 0)
-            )
-        
-        # Отрисовка кнопки "ПРОДОЛЖИТЬ"
-        for button in self.button_list:
-            # Определяем цвет кнопки
-            if self.pressed_button == button:
-                color = BUTTON_PRESSED
-            elif self.hovered_button == button:
-                color = BUTTON_HOVER
-            else:
-                color = BUTTON_NORMAL
-            
-            # Рисуем кнопку
-            arcade.draw_rect_filled(
-                arcade.rect.XYWH(
-                    button["x"] + button["width"] // 2,
-                    button["y"] + button["height"] // 2,
-                    button["width"],
-                    button["height"]
-                ),
-                color
-            )
-            
-            # Рамка кнопки
-            arcade.draw_rect_outline(
-                arcade.rect.XYWH(
-                    button["x"] + button["width"] // 2,
-                    button["y"] + button["height"] // 2,
-                    button["width"],
-                    button["height"]
-                ),
-                BUTTON_BORDER,
-                2
-            )
-            
-            # Текст кнопки
-            arcade.draw_text(
-                button["text"],
-                button["x"] + button["width"] // 2,
-                button["y"] + button["height"] // 2,
-                TEXT_COLOR,
-                20,
-                anchor_x="center",
-                anchor_y="center",
-                font_name=("Arial", "arial"),
-                bold=True
-            )
-    
-    def on_mouse_motion(self, x, y, dx, dy):
-        self.hovered_button = None
-        for button in self.button_list:
-            if (button["x"] <= x <= button["x"] + button["width"] and 
-                button["y"] <= y <= button["y"] + button["height"]):
-                self.hovered_button = button
-                break
-    
-    def on_mouse_press(self, x, y, button, modifiers):
-        self.pressed_button = None
-        for btn in self.button_list:
-            if (btn["x"] <= x <= btn["x"] + btn["width"] and 
-                btn["y"] <= y <= btn["y"] + btn["height"]):
-                self.pressed_button = btn
-                break
-    
-    def on_mouse_release(self, x, y, button, modifiers):
-        if self.pressed_button:
-            for btn in self.button_list:
-                if (btn["x"] <= x <= btn["x"] + btn["width"] and 
-                    btn["y"] <= y <= btn["y"] + btn["height"] and 
-                    btn == self.pressed_button):
-                    
-                    if btn["action"] == "continue":
-                        # Переходим к игровому уровню
-                        game_view = GameView()
-                        game_view.setup(self.floor_number)
-                        self.window.show_view(game_view)
-                    
-                    break
-        
-        self.pressed_button = None
-    
-    def on_key_press(self, key, modifiers):
-        # Разрешаем нажатие Enter для продолжения
-        if key == arcade.key.ENTER or key == arcade.key.SPACE:
-            game_view = GameView()
-            game_view.setup(self.floor_number)
-            self.window.show_view(game_view)
-        elif key == arcade.key.ESCAPE:
-            # Возврат к выбору этажа
-            floor_view = FloorSelectionView()
-            floor_view.setup()
-            self.window.show_view(floor_view)
-
-
-# ============== СУЩНОСТИ ИГРЫ ==============
+# ====================== ENTITIES ======================
 class Player:
-    def __init__(self):
+    def __init__(self, x, y):
+        # try to load sprite, fallback to solid color
+        self.burn_timer = 0.0
+        self.burn_dps = 0.0
+
+        self.slow_timer = 0.0
+        self.base_speed = PLAYER_SPEED
+
+        # ───── активный предмет: щит ─────
+        self.has_shield = False
+        self.shield_ready = False
+        self.shield_room_cooldown = 1
+        self.parry_window = 2   
+        self.parry_timer = 0.0
+        self.parry_active = False
+        self.shield_radius = 140
+
+
         try:
-            self.sprite = arcade.Sprite("assets/sprites/Player 2.png", scale=0.08)  # Уменьшен масштаб
-        except:
-            # Заглушка если файл не найден
-            self.sprite = arcade.SpriteSolidColor(40, 40, arcade.color.BLUE)
-        
-        self.sprite.center_x = SCREEN_WIDTH // 2
-        self.sprite.center_y = SCREEN_HEIGHT // 2
+            self.sprite = arcade.Sprite("assets/player.png", scale=PLAYER_SCALE)
+        except Exception:
+            self.sprite = arcade.SpriteSolidColor(32, 48, arcade.color.BLUE)
+        self.sprite.center_x = x
+        self.sprite.center_y = y
 
-        self.speed = 200  # Уменьшена скорость
-        self.hp = 100
-        self.max_hp = 100
+        self.speed = PLAYER_SPEED
+        self.hp = PLAYER_HP
+        self.max_hp = PLAYER_HP
 
+        # weapon: "sword" (default), "axe", "bow"
+        self.weapon = "sword"
+
+        # keys count
+        self.keys = 0
+
+        # attack timer
         self.attack_cooldown = 0.25
         self.attack_timer = 0.0
+        self.shield_time_cooldown = 0.0
 
-        self.attack_dir = None
+        self.dash_cooldown = 0.0
+        self.dash_cd_time = 1.2      # перезарядка
+        self.dash_time = 0.0
+        self.dash_duration = 0.18
+        self.dash_speed = 1200
+        self.dash_dx = 0
+        self.dash_dy = 0
 
     @property
     def x(self):
@@ -570,17 +240,37 @@ class Player:
     def y(self):
         return self.sprite.center_y
 
-    def move(self, dx, dy):
-        self.sprite.center_x += dx
-        self.sprite.center_y += dy
+    def update(self, dt, keys_held):
+        # reduce attack timer
+        if self.slow_timer > 0:
+            self.slow_timer -= dt
+            self.speed = self.base_speed * 0.4
+        else:
+            self.speed = self.base_speed
 
-        # ограничение по экрану
-        self.sprite.center_x = max(20, min(SCREEN_WIDTH - 20, self.sprite.center_x))
-        self.sprite.center_y = max(20, min(SCREEN_HEIGHT - 20, self.sprite.center_y))
 
-    def update(self, dt):
         if self.attack_timer > 0:
             self.attack_timer -= dt
+
+        if self.dash_cooldown > 0:
+            self.dash_cooldown -= dt
+
+        if self.burn_timer > 0:
+            self.burn_timer -= dt
+            self.hp -= self.burn_dps * dt
+            if self.burn_timer <= 0:
+                self.burn_dps = 0.0
+        
+        if self.burn_timer > 0:
+            self.sprite.color = arcade.color.ORANGE
+        elif self.burn_timer == 0:
+            self.sprite.color = arcade.color.LIGHT_GRAY
+
+        if self.parry_timer > 0:
+            self.parry_timer -= dt
+            if self.parry_timer <= 0:
+                self.parry_active = False
+
 
     def can_attack(self):
         return self.attack_timer <= 0
@@ -588,22 +278,21 @@ class Player:
     def reset_attack(self):
         self.attack_timer = self.attack_cooldown
 
-
 class Enemy:
-    def __init__(self, x, y):
+    def __init__(self, x, y, hp=None, speed=None):
+        # try asset
+        self.stunned = False
+        self.stun_timer = 0.0
         try:
-            self.sprite = arcade.Sprite("assets/sprites/enemy.png", scale=0.07)  # Уменьшен масштаб
-        except:
-            # Заглушка если файл не найден
-            self.sprite = arcade.SpriteSolidColor(32, 32, arcade.color.RED)
-        
+            self.sprite = arcade.Sprite("assets/enemy 2.png", scale=ENEMY_SCALE)
+        except Exception:
+            self.sprite = arcade.SpriteSolidColor(28, 28, arcade.color.RED)
         self.sprite.center_x = x
         self.sprite.center_y = y
 
-        self.hp = 60
-        self.speed = 160  # Уменьшена скорость
+        self.hp = hp if hp is not None else ENEMY_HP
+        self.speed = speed if speed is not None else ENEMY_SPEED
 
-    # удобные прокси
     @property
     def x(self):
         return self.sprite.center_x
@@ -612,58 +301,516 @@ class Enemy:
     def y(self):
         return self.sprite.center_y
 
-    def update(self, player, dt, walls):
+    @property
+    def alive(self):
+        return self.hp > 0
+
+    def update(self, player, walls, dt):
+        if self.stunned:
+            self.stun_timer -= dt
+            if self.stun_timer <= 0:
+                self.stunned = False
+            return
+        # simple seek AI
         dx = player.x - self.x
         dy = player.y - self.y
         dist = math.hypot(dx, dy)
-
-        if dist < 200 and dist > 1:  # Уменьшена дистанция преследования
+        if dist < 360 and dist > 1:
             vx = dx / dist * self.speed * dt
             vy = dy / dist * self.speed * dt
 
-            # Движение с проверкой столкновений
+            # move x and check collision
             old_x = self.sprite.center_x
             self.sprite.center_x += vx
             if arcade.check_for_collision_with_list(self.sprite, walls):
                 self.sprite.center_x = old_x
 
+            # move y and check collision
             old_y = self.sprite.center_y
             self.sprite.center_y += vy
             if arcade.check_for_collision_with_list(self.sprite, walls):
                 self.sprite.center_y = old_y
 
-            # Поворот спрайта
+            # flip sprite
             if dx > 0:
-                self.sprite.scale_x = -abs(self.sprite.scale_x)
+                self.sprite.scale_x = abs(self.sprite.scale_x)
             else:
-                self.sprite.scale_x = +abs(self.sprite.scale_x)
+                self.sprite.scale_x = -abs(self.sprite.scale_x)
+
+    @staticmethod
+    def random_spawn(margin_x=200, margin_y=150):
+        x = random.randint(margin_x, 1280 - margin_x)
+        y = random.randint(margin_y, 720 - margin_y)
+        return Enemy(x, y)
+
+class FastEnemy(Enemy):
+    def __init__(self, x, y):
+        super().__init__(x, y, hp=25, speed=260)
+        self.sprite.texture = arcade.load_texture("assets/enemy_fast.png")
+
+
+class TankEnemy(Enemy):
+    def __init__(self, x, y):
+        super().__init__(x, y, hp=140, speed=70)
+        self.sprite.texture = arcade.load_texture("assets/enemy_tank.png")
+
+
+class RangedEnemy(Enemy):
+    def __init__(self, x, y):
+        super().__init__(x, y, hp=40, speed=80)
+        self.sprite.texture = arcade.load_texture("assets/enemy_ranged.png")
+        self.shoot_cd = 1.5
+        self.timer = 0
+        self.timer = random.uniform(0.3, 1.2)
+    
+    def try_shoot(self, player, projectile_list):
+        if self.timer > 0:
+            return
+
+        dx = player.x - self.x
+        dy = player.y - self.y
+        dist = math.hypot(dx, dy)
+        if dist < 160 or dist > 520:
+            return
+
+        dx /= dist
+        dy /= dist
+
+        arrow = arcade.Sprite("assets/arrow.png", scale=5)
+        arrow.center_x = self.x + dx * 36
+        arrow.center_y = self.y + dy * 36
+
+        arrow.change_x = dx * ARROW_SPEED
+        arrow.change_y = dy * ARROW_SPEED
+        arrow.angle = math.degrees(math.atan2(dx, dy))
+
+        arrow.damage = 1
+        arrow.from_enemy = True
+        arrow.time_alive = 0
+
+        projectile_list.append(arrow)
+        self.timer = self.shoot_cd
+
+    def update(self, player, walls, dt, projectile_list):
+        self.timer -= dt
+        self.try_shoot(player, projectile_list)
+
+        dx = player.x - self.x
+        dy = player.y - self.y
+        dist = math.hypot(dx, dy)
+
+        # держит дистанцию
+        if dist < 220:
+            vx = -dx / dist * self.speed * dt
+            vy = -dy / dist * self.speed * dt
+        elif dist > 360:
+            vx = dx / dist * self.speed * dt
+            vy = dy / dist * self.speed * dt
+        else:
+            vx = vy = 0
+
+        ox = self.sprite.center_x
+        self.sprite.center_x += vx
+        if arcade.check_for_collision_with_list(self.sprite, walls):
+            self.sprite.center_x = ox
+
+        oy = self.sprite.center_y
+        self.sprite.center_y += vy
+        if arcade.check_for_collision_with_list(self.sprite, walls):
+            self.sprite.center_y = oy
+
+
+class EliteRunner(FastEnemy):
+    def __init__(self, x, y):
+        super().__init__(x, y)
+        self.dash_cd = random.uniform(1.5, 2.5)
+        self.dash_timer = 0.0
+        self.is_dashing = False
+        self.dash_dir = (0, 0)
+        self.dash_speed = 900
+
+        self.hp = 45  # чуть жирнее обычного бегуна
+
+    def update(self, player, walls, dt):
+        if self.stunned:
+            self.stun_timer -= dt
+            if self.stun_timer <= 0:
+                self.stunned = False
+            return
+        self.dash_cd -= dt
+
+        dx = player.x - self.x
+        dy = player.y - self.y
+        dist = math.hypot(dx, dy)
+
+        # старт рывка
+        if not self.is_dashing and self.dash_cd <= 0 and dist > 60:
+            self.is_dashing = True
+            self.dash_timer = 0.25
+            self.dash_cd = random.uniform(2.0, 3.0)
+            self.dash_dir = (dx / max(dist, 1), dy / max(dist, 1))
+
+        if self.is_dashing:
+            self.dash_timer -= dt
+            vx = self.dash_dir[0] * self.dash_speed * dt
+            vy = self.dash_dir[1] * self.dash_speed * dt
+
+            ox = self.sprite.center_x
+            oy = self.sprite.center_y
+
+            self.sprite.center_x += vx
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_x = ox
+                self.is_dashing = False
+
+            self.sprite.center_y += vy
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_y = oy
+                self.is_dashing = False
+
+            if self.dash_timer <= 0:
+                self.is_dashing = False
+        else:
+            # обычное поведение бегуна
+            super().update(player, walls, dt)
+        
+        self.sprite.color = arcade.color.PURPLE_HEART
+
+
+class EliteShooter(Enemy):
+    def __init__(self, x, y):
+        super().__init__(x, y, hp=55, speed=90)
+        self.shoot_cd = random.uniform(3.0, 4.0)
+        self.timer = random.uniform(1.5, 3)
+
+    def update(self, player, walls, dt, projectile_list):
+        if self.stunned:
+            self.stun_timer -= dt
+            if self.stun_timer <= 0:
+                self.stunned = False
+            return
+        self.timer -= dt
+
+        dx = player.x - self.x
+        dy = player.y - self.y
+        dist = math.hypot(dx, dy)
+
+        # движение — просто идёт на игрока
+        if dist > 1:
+            vx = dx / dist * self.speed * dt
+            vy = dy / dist * self.speed * dt
+
+            ox = self.sprite.center_x
+            self.sprite.center_x += vx
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_x = ox
+
+            oy = self.sprite.center_y
+            self.sprite.center_y += vy
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_y = oy
+
+        # стрельба
+        if self.timer <= 0 and dist < 520:
+            dx /= max(dist, 1)
+            dy /= max(dist, 1)
+
+            arrow = arcade.Sprite("assets/arrow.png", scale=4)
+            arrow.center_x = self.x
+            arrow.center_y = self.y
+            arrow.change_x = dx * 200   # медленная стрела
+            arrow.change_y = dy * 200
+            arrow.damage = 12
+            arrow.from_enemy = True
+
+            projectile_list.append(arrow)
+            self.timer = self.shoot_cd
+        
+        self.sprite.color = arcade.color.PURPLE_HEART
+
+
+class EliteTankFloor3(TankEnemy):
+    def __init__(self, x, y):
+        super().__init__(x, y)
+        self.hp = 260
+        self.speed = 55
+
+        self.slam_cd = random.uniform(2.5, 4.0)
+        self.slam_timer = 0.0
+        self.slam_radius = 140
+        self.slam_damage = 35
+        self.slow_duration = 2.5
+
+        self.is_slamming = False
+        self.warn_time = 0.6  # визуальное предупреждение
+        self.warn_timer = 0.0
+
+        self.sprite.color = arcade.color.DARK_RED
+
+    def update(self, player, walls, dt):
+        if self.stunned:
+            self.stun_timer -= dt
+            if self.stun_timer <= 0:
+                self.stunned = False
+            return
+        self.slam_timer -= dt
+
+        dx = player.x - self.x
+        dy = player.y - self.y
+        dist = math.hypot(dx, dy)
+
+        # ───── START SLAM ─────
+        if not self.is_slamming and self.slam_timer <= 0 and dist < 220:
+            self.is_slamming = True
+            self.warn_timer = self.warn_time
+            self.slam_timer = random.uniform(3.0, 4.5)
+
+        # ───── SLAM WARNING ─────
+        if self.is_slamming:
+            self.warn_timer -= dt
+
+            if self.warn_timer <= 0:
+                # APPLY SLAM
+                if dist <= self.slam_radius:
+                    player.hp -= self.slam_damage
+                    player.slow_timer = max(player.slow_timer, self.slow_duration)
+
+                self.is_slamming = False
+            return  # во время удара не двигается
+
+        # ───── NORMAL MOVE ─────
+        if dist > 60:
+            vx = dx / dist * self.speed * dt
+            vy = dy / dist * self.speed * dt
+
+            ox = self.sprite.center_x
+            self.sprite.center_x += vx
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_x = ox
+
+            oy = self.sprite.center_y
+            self.sprite.center_y += vy
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_y = oy
+
+        # flip
+        if dx > 0:
+            self.sprite.scale_x = abs(self.sprite.scale_x)
+        else:
+            self.sprite.scale_x = -abs(self.sprite.scale_x)
+
+        self.sprite.color = arcade.color.PURPLE_HEART
+
+
+class EliteArcherFloor3(RangedEnemy):
+    def __init__(self, x, y):
+        super().__init__(x, y)
+
+        self.volley_cooldown = random.uniform(3.0, 4.5)
+        self.volley_timer = self.volley_cooldown
+
+        self.in_volley = False
+        self.volley_count = 0
+        self.max_volley = random.randint(3, 5)
+        self.volley_interval = 0.3
+        self.volley_interval_timer = 0.0
+
+        self.sprite.color = arcade.color.PURPLE_HEART
+
+    def update(self, player, walls, dt, projectile_list):
+        if self.stunned:
+            self.stun_timer -= dt
+            if self.stun_timer <= 0:
+                self.stunned = False
+            return
+        dx = player.x - self.x
+        dy = player.y - self.y
+        dist = math.hypot(dx, dy)
+
+        # ───── движение (просто идёт на игрока) ─────
+        if not self.in_volley and dist > 120:
+            vx = dx / max(dist, 1) * self.speed * dt
+            vy = dy / max(dist, 1) * self.speed * dt
+
+            ox = self.sprite.center_x
+            self.sprite.center_x += vx
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_x = ox
+
+            oy = self.sprite.center_y
+            self.sprite.center_y += vy
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_y = oy
+
+        # ───── логика залпа ─────
+        self.volley_timer -= dt
+
+        if not self.in_volley and self.volley_timer <= 0 and dist < 600:
+            self.in_volley = True
+            self.volley_count = 0
+            self.max_volley = random.randint(6, 10)
+            self.volley_interval_timer = 0.0
+
+        if self.in_volley:
+            self.volley_interval_timer -= dt
+
+            if self.volley_interval_timer <= 0:
+                self.fire_arrow(player, projectile_list)
+                self.volley_count += 1
+                self.volley_interval_timer = self.volley_interval
+
+                if self.volley_count >= self.max_volley:
+                    self.in_volley = False
+                    self.volley_timer = self.volley_cooldown
+
+        # ───── флип спрайта ─────
+        if dx > 0:
+            self.sprite.scale_x = abs(self.sprite.scale_x)
+        else:
+            self.sprite.scale_x = -abs(self.sprite.scale_x)
+
+        self.sprite.color = arcade.color.PURPLE_HEART
+
+    def fire_arrow(self, player, projectile_list):
+        dx = player.x - self.x
+        dy = player.y - self.y
+        dist = math.hypot(dx, dy)
+
+        dx /= max(dist, 1)
+        dy /= max(dist, 1)
+
+        arrow = arcade.Sprite("assets/arrow.png", scale=4)
+        arrow.center_x = self.x
+        arrow.center_y = self.y
+
+        arrow.change_x = dx * 650
+        arrow.change_y = dy * 650
+        arrow.angle = math.degrees(math.atan2(dy, dx))
+
+        arrow.damage = 14
+        arrow.from_enemy = True
+
+        projectile_list.append(arrow)
+
+    
 
 
 class Boss(Enemy):
     def __init__(self, x, y):
-        super().__init__(x, y)
+        # reuse enemy constructor but with boss sprite if exists
         try:
-            self.sprite.texture = arcade.load_texture("assets/sprites/boss.png")
-        except:
-            pass  # Оставляем заглушку если текстура не найдена
-        
-        self.sprite.scale = 0.075  # Уменьшен масштаб
-        self.max_hp = 120
-        self.hp = self.max_hp
-        self.phase = 1
-        self.shoot_timer = 2.0
-        self.dash_timer = 5.0
+            self.sprite = arcade.Sprite("assets/boss.png", scale=BOSS_SCALE)
+        except Exception:
+            self.sprite = arcade.SpriteSolidColor(64, 64, arcade.color.PURPLE)
+        self.sprite.center_x = x
+        self.sprite.center_y = y
 
-    def update(self, player, dt, projectiles, walls):
+        self.is_dashing = False
+        self.dash_time = 0.0
+        self.dash_dir_x = 0.0
+        self.dash_dir_y = 0.0
+
+        self.dash_cooldown = 2.5 
+        self.dash_speed = 700
+
+        self.hp = BOSS_HP
+        self.max_hp = BOSS_HP
+        self.speed = BOSS_SPEED
+
+        self.phase = 1
+
+        self.slowed = False
+        self.slow_timer = 0.0
+        self.slow_mult = 1.0
+
+    @property
+    def alive(self):
+        return self.hp > 0
+
+    def update_phase(self, player, walls, dt):
+        if self.slowed:
+            self.slow_timer -= dt
+            if self.slow_timer <= 0:
+                self.slowed = False
+                self.slow_mult = 1.0
+
+        # determine phase by hp ratio
+        if self.phase == 1:
+            desired_distance = 260
+        elif self.phase == 2:
+            desired_distance = 140
+        else:
+            desired_distance = 60
+
+        hp_ratio = self.hp / self.max_hp if self.max_hp > 0 else 0.0
+
+        if hp_ratio <= 0.33:
+            self.phase = 3
+        elif hp_ratio <= 0.66:
+            self.phase = 2
+        else:
+            self.phase = 1
+
+        self.dash_cooldown -= dt
+
+        # boss behavior: slower or faster by phase
         dx = player.x - self.x
         dy = player.y - self.y
         dist = math.hypot(dx, dy)
+        if dist > 60 and dist > 1:
+            speed_multiplier = {1: 0.6, 2: 1.0, 3: 1.6}[self.phase]
+            vx = dx / dist * (self.speed * speed_multiplier * (self.slow_mult ** 2)) * dt
+            vy = dy / dist * (self.speed * speed_multiplier * (self.slow_mult ** 2)) * dt
+
+            old_x = self.sprite.center_x
+            self.sprite.center_x += vx
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_x = old_x
+            old_y = self.sprite.center_y
+            self.sprite.center_y += vy
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_y = old_y
         
-        # Движение с проверкой столкновений
-        if dist > 120:  # Уменьшена дистанция
-            vx = (dx / dist) * (70 + 15 * self.phase) * dt  # Уменьшена скорость
-            vy = (dy / dist) * (70 + 15 * self.phase) * dt
-            
+        else:
+            # небольшое давление на игрока вблизи
+            vx = dx / max(dist, 1) * self.speed * (self.slow_mult ** 2) * 0.4 * dt
+            vy = dy / max(dist, 1) * self.speed * (self.slow_mult ** 2) * 0.4 * dt
+
+            old_x = self.sprite.center_x
+            self.sprite.center_x += vx
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_x = old_x
+
+            old_y = self.sprite.center_y
+            self.sprite.center_y += vy
+
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_y = old_y
+
+
+        if not self.is_dashing and self.phase >= 2 and self.dash_cooldown <= 0 and dist > 120:
+            self.is_dashing = True
+
+            # фиксируем направление рывка
+            self.dash_dir_x = dx / max(dist, 1)
+            self.dash_dir_y = dy / max(dist, 1)
+
+            # параметры рывка по фазам
+            if self.phase == 3:
+                self.dash_time = 1.1
+                self.dash_speed = 1100 * self.slow_mult ** 2
+            else:
+                self.dash_time = 0.8
+                self.dash_speed = 900 * self.slow_mult ** 2
+
+            self.dash_cooldown = 2.5
+
+        if self.is_dashing:
+            self.dash_time -= dt
+
+            vx = self.dash_dir_x * self.dash_speed * dt
+            vy = self.dash_dir_y * self.dash_speed * dt
+
             old_x = self.sprite.center_x
             self.sprite.center_x += vx
             if arcade.check_for_collision_with_list(self.sprite, walls):
@@ -674,1140 +821,884 @@ class Boss(Enemy):
             if arcade.check_for_collision_with_list(self.sprite, walls):
                 self.sprite.center_y = old_y
 
-        # Фазы
-        if self.hp < 200:
-            self.phase = 2
-        if self.hp < 100:
-            self.phase = 3
+            if self.dash_time <= 0:
+                self.is_dashing = False
 
-        # Стрельба
-        self.shoot_timer -= dt
-        if self.shoot_timer <= 0:
-            self.shoot_timer = max(0.6, 2.0 - 0.4 * self.phase)
-            offsets = (-0.3, 0.0, 0.3) if self.phase == 1 else (-0.5, -0.2, 0.0, 0.2, 0.5)
-            for off in offsets:
-                projectiles.append(Projectile(self.x, self.y, player.x, player.y, 
-                                            angle_offset=off, speed=350 + 30*self.phase,  # Уменьшена скорость
-                                            damage=10 + 4*self.phase))
-
-        # Рывок
-        self.dash_timer -= dt
-        if self.dash_timer <= 0:
-            self.dash_timer = max(2.0, 5.0 - self.phase)
-            if dist > 10:
-                nx = dx / dist
-                ny = dy / dist
-                dash_dist = 180 + 30 * self.phase  # Уменьшена дистанция рывка
-                
-                # Рывок с проверкой столкновений
-                old_x = self.sprite.center_x
-                old_y = self.sprite.center_y
-                self.sprite.center_x += nx * dash_dist
-                self.sprite.center_y += ny * dash_dist
-                
-                if arcade.check_for_collision_with_list(self.sprite, walls):
-                    self.sprite.center_x = old_x
-                    self.sprite.center_y = old_y
-
-
-class Projectile:
-    def __init__(self, x, y, tx, ty, angle_offset=0.0, speed=350.0, damage=8):  # Уменьшена скорость
-        self.x = x
-        self.y = y
-        dx = tx - x
-        dy = ty - y
-        base = math.atan2(dy, dx)
-        angle = base + angle_offset
-        self.vx = math.cos(angle) * speed
-        self.vy = math.sin(angle) * speed
-        self.damage = damage
-
-    def update(self, dt):
-        self.x += self.vx * dt
-        self.y += self.vy * dt
-
-    def draw(self):
-        left = self.x - 3  # Уменьшен размер
-        bottom = self.y - 3
-        arcade.draw_lbwh_rectangle_filled(left, bottom, 6, 6, arcade.color.YELLOW)
-
-
-class Heart:
-    def __init__(self, x, y):
-        self.x = x
-        self.y = y
-
-    def draw(self):
-        matrix_w = len(HEART_MATRIX[0]) * PIXEL
-        matrix_h = len(HEART_MATRIX) * PIXEL
-        top_left_x = self.x - matrix_w // 2
-        top_left_y = self.y + matrix_h // 2
-        draw_pixel_matrix(HEART_MATRIX, top_left_x, top_left_y, arcade.color.PINK)
-
-
-# ============== КЛАССЫ ДЛЯ МЕНЮ ==============
-class ItemType(Enum):
-    WEAPON = "weapon"
-    ARMOR = "armor"
-    PASSIVE = "passive"
-    ACTIVE = "active"
-    RESOURCE = "resource"
-
-
-@dataclass
-class Item:
-    name: str
-    item_type: ItemType
-    description: str
-    stats: Optional[Dict] = None
-    color: Optional[Tuple[int, int, int]] = None
-    
-    def __post_init__(self):
-        if self.stats is None:
-            self.stats = {}
-        if self.color is None:
-            self.color = self.get_default_color()
-    
-    def get_default_color(self):
-        colors = {
-            ItemType.WEAPON: (192, 192, 192),
-            ItemType.ARMOR: (184, 134, 11),
-            ItemType.PASSIVE: (138, 43, 226),
-            ItemType.ACTIVE: (0, 191, 255),
-            ItemType.RESOURCE: (50, 205, 50)
-        }
-        return colors.get(self.item_type, (255, 255, 255))
-
-
-# ============== ОБУЧЕНИЕ ==============
-class TutorialView(arcade.View):
-    def __init__(self, previous_view):
-        super().__init__()
-        self.previous_view = previous_view
-        self.button_list = []
-        self.hovered_button = None
-        self.pressed_button = None
-        
-    def setup(self):
-        # Кнопка возврата
-        back_button = {
-            "x": SCREEN_WIDTH // 2 - 80,
-            "y": 40,
-            "width": 160,
-            "height": 40,
-            "text": "НАЗАД",
-            "action": "back"
-        }
-        self.button_list.append(back_button)
-        
-    def on_draw(self):
-        self.clear()
-        
-        # Фон на весь экран
-        arcade.draw_rect_filled(
-            arcade.rect.XYWH(
-                SCREEN_WIDTH // 2, 
-                SCREEN_HEIGHT // 2, 
-                SCREEN_WIDTH, 
-                SCREEN_HEIGHT
-            ),
-            (20, 20, 40)
-        )
-        
-        # Заголовок
-        arcade.draw_text(
-            "ОБУЧЕНИЕ", 
-            SCREEN_WIDTH // 2, 
-            SCREEN_HEIGHT - 60,
-            (255, 215, 0),
-            36,
-            anchor_x="center",
-            anchor_y="center",
-            font_name=("Arial", "arial"),
-            bold=True
-        )
-        
-        # Текст обучения
-        tutorial_text = [
-            "УПРАВЛЕНИЕ:",
-            "W, A, S, D - движение",
-            "Стрелки - атака в направлении",
-            "E - войти в дверь",
-            "ESC - выход в меню",
-            "",
-            "ЦЕЛЬ ИГРЫ:",
-            "Исследуйте все комнаты этажа",
-            "В последней комнате сразитесь с боссом",
-            "",
-            "",
-            "ПОДСКАЗКИ:",
-            "• Красные сердца увеличивают максимальное здоровье",
-            "• Используйте коробки для укрытия от врагов",
-            "• Уклоняйтесь от снарядов босса",
-            "• Двери откроются после уничтожения всех врагов",
-            "• Исследуйте все комнаты для нахождения секретов"
-        ]
-        
-        y_pos = SCREEN_HEIGHT - 100
-        for line in tutorial_text:
-            if line.startswith("•"):
-                color = (200, 200, 100)
-                font_size = 16
-            elif line.endswith(":"):
-                color = (255, 215, 0)
-                font_size = 20
-            else:
-                color = (220, 220, 220)
-                font_size = 18
-            
-            if line:  # Не рисуем пустые строки
-                arcade.draw_text(
-                    line,
-                    SCREEN_WIDTH // 2,
-                    y_pos,
-                    color,
-                    font_size,
-                    anchor_x="center",
-                    anchor_y="center",
-                    font_name=("Arial", "arial"),
-                    bold=(line.endswith(":"))
-                )
-            y_pos -= 25
-        
-        # Отрисовка кнопок
-        for button in self.button_list:
-            # Определяем цвет кнопки
-            if self.pressed_button == button:
-                color = BUTTON_PRESSED
-            elif self.hovered_button == button:
-                color = BUTTON_HOVER
-            else:
-                color = BUTTON_NORMAL
-            
-            # Рисуем кнопку
-            arcade.draw_rect_filled(
-                arcade.rect.XYWH(
-                    button["x"] + button["width"] // 2,
-                    button["y"] + button["height"] // 2,
-                    button["width"],
-                    button["height"]
-                ),
-                color
-            )
-            
-            # Рамка кнопки
-            arcade.draw_rect_outline(
-                arcade.rect.XYWH(
-                    button["x"] + button["width"] // 2,
-                    button["y"] + button["height"] // 2,
-                    button["width"],
-                    button["height"]
-                ),
-                BUTTON_BORDER,
-                2
-            )
-            
-            # Текст кнопки
-            arcade.draw_text(
-                button["text"],
-                button["x"] + button["width"] // 2,
-                button["y"] + button["height"] // 2,
-                TEXT_COLOR,
-                18,
-                anchor_x="center",
-                anchor_y="center",
-                font_name=("Arial", "arial"),
-                bold=True
-            )
-    
-    def on_mouse_motion(self, x, y, dx, dy):
-        self.hovered_button = None
-        for button in self.button_list:
-            if (button["x"] <= x <= button["x"] + button["width"] and 
-                button["y"] <= y <= button["y"] + button["height"]):
-                self.hovered_button = button
-                break
-    
-    def on_mouse_press(self, x, y, button, modifiers):
-        self.pressed_button = None
-        for btn in self.button_list:
-            if (btn["x"] <= x <= btn["x"] + btn["width"] and 
-                btn["y"] <= y <= btn["y"] + btn["height"]):
-                self.pressed_button = btn
-                break
-    
-    def on_mouse_release(self, x, y, button, modifiers):
-        if self.pressed_button:
-            for btn in self.button_list:
-                if (btn["x"] <= x <= btn["x"] + btn["width"] and 
-                    btn["y"] <= y <= btn["y"] + btn["height"] and 
-                    btn == self.pressed_button):
-                    
-                    if btn["action"] == "back":
-                        # Возвращаемся к предыдущему экрану
-                        self.window.show_view(self.previous_view)
-                    
-                    break
-        
-        self.pressed_button = None
-    
-    def on_key_press(self, key, modifiers):
-        if key == arcade.key.ESCAPE:
-            # Возврат к предыдущему экрану
-            self.window.show_view(self.previous_view)
-
-
-# ============== ГЛАВНОЕ МЕНЮ ==============
-class MainMenuView(arcade.View):
-    def __init__(self):
-        super().__init__()
-        self.button_list = []
-        self.hovered_button = None
-        self.pressed_button = None
-        
-    def setup(self):
-        # Загрузка фона
-        try:
-            self.background_texture = arcade.load_texture("data/images/Main_Background.png")
-        except:
-            self.background_texture = None
-        
-        # Создаем кнопки
-        button_width = 320
-        button_height = 50
-        
-        # Кнопка "Начать игру"
-        start_button = {
-            "x": SCREEN_WIDTH // 2 - button_width // 2,
-            "y": SCREEN_HEIGHT // 2 - 30,
-            "width": button_width,
-            "height": button_height,
-            "text": "НАЧАТЬ ИГРУ",
-            "action": "start"
-        }
-        self.button_list.append(start_button)
-        
-        # Кнопка "Выход"
-        exit_button = {
-            "x": SCREEN_WIDTH // 2 - button_width // 2,
-            "y": SCREEN_HEIGHT // 2 - 90,
-            "width": button_width,
-            "height": button_height,
-            "text": "ВЫХОД",
-            "action": "exit"
-        }
-        self.button_list.append(exit_button)
-        
-    def on_draw(self):
-        self.clear()
-        
-        # Отрисовка фона на весь экран
-        if self.background_texture:
-            arcade.draw_texture_rect(
-                self.background_texture,
-                arcade.rect.XYWH(
-                    SCREEN_WIDTH // 2, 
-                    SCREEN_HEIGHT // 2, 
-                    SCREEN_WIDTH, 
-                    SCREEN_HEIGHT
-                )
-            )
+        if dx > 0:
+            self.sprite.scale_x = abs(self.sprite.scale_x)
         else:
-            arcade.draw_rect_filled(
-                arcade.rect.XYWH(
-                    SCREEN_WIDTH // 2, 
-                    SCREEN_HEIGHT // 2, 
-                    SCREEN_WIDTH, 
-                    SCREEN_HEIGHT
-                ),
-                (20, 20, 40)
-            )
-        
-        # Отрисовка кнопок
-        for button in self.button_list:
-            # Определяем цвет кнопки
-            if self.pressed_button == button:
-                color = BUTTON_PRESSED
-            elif self.hovered_button == button:
-                color = BUTTON_HOVER
-            else:
-                color = BUTTON_NORMAL
-            
-            # Рисуем кнопку
-            arcade.draw_rect_filled(
-                arcade.rect.XYWH(
-                    button["x"] + button["width"] // 2,
-                    button["y"] + button["height"] // 2,
-                    button["width"],
-                    button["height"]
-                ),
-                color
-            )
-            
-            # Рамка кнопки
-            arcade.draw_rect_outline(
-                arcade.rect.XYWH(
-                    button["x"] + button["width"] // 2,
-                    button["y"] + button["height"] // 2,
-                    button["width"],
-                    button["height"]
-                ),
-                BUTTON_BORDER,
-                2
-            )
-            
-            # Текст кнопки
-            arcade.draw_text(
-                button["text"],
-                button["x"] + button["width"] // 2,
-                button["y"] + button["height"] // 2,
-                TEXT_COLOR,
-                20,
-                anchor_x="center",
-                anchor_y="center",
-                font_name=("Arial", "arial"),
-                bold=True
-            )
-    
-    def on_mouse_motion(self, x, y, dx, dy):
-        self.hovered_button = None
-        for button in self.button_list:
-            if (button["x"] <= x <= button["x"] + button["width"] and 
-                button["y"] <= y <= button["y"] + button["height"]):
-                self.hovered_button = button
-                break
-    
-    def on_mouse_press(self, x, y, button, modifiers):
-        self.pressed_button = None
-        for btn in self.button_list:
-            if (btn["x"] <= x <= btn["x"] + btn["width"] and 
-                btn["y"] <= y <= btn["y"] + btn["height"]):
-                self.pressed_button = btn
-                break
-    
-    def on_mouse_release(self, x, y, button, modifiers):
-        if self.pressed_button:
-            for btn in self.button_list:
-                if (btn["x"] <= x <= btn["x"] + btn["width"] and 
-                    btn["y"] <= y <= btn["y"] + btn["height"] and 
-                    btn == self.pressed_button):
-                    
-                    if btn["action"] == "start":
-                        # Переход к выбору этажа
-                        floor_view = FloorSelectionView()
-                        floor_view.setup()
-                        self.window.show_view(floor_view)
-                    elif btn["action"] == "exit":
-                        arcade.exit()
-                    break
-        
-        self.pressed_button = None
+            self.sprite.scale_x = -abs(self.sprite.scale_x)
 
+        if self.phase == 3:
+            self.sprite.color = arcade.color.RED_ORANGE
+        elif self.phase == 2:
+            self.sprite.color = arcade.color.ORANGE
+        else:
+            self.sprite.color = arcade.color.WHITE
 
-# ============== ВЫБОР ЭТАЖА ==============
-class FloorSelectionView(arcade.View):
-    def __init__(self):
-        super().__init__()
-        self.button_list = []
-        self.hovered_button = None
-        self.pressed_button = None
-        self.floor_images = {
-            1: "First_Floor",
-            2: "Second_Floor", 
-            3: "Third_Floor"
-        }
-        self.showing_floor_image = False
-        self.floor_image_start_time = 0
-        self.selected_floor = None
-        self.floor_textures = {}
-        
-    def setup(self):
-        # Загружаем текстуры этажей
-        for floor_num, image_name in self.floor_images.items():
-            try:
-                texture = arcade.load_texture(f"data/images/{image_name}.png")
-                self.floor_textures[floor_num] = texture
-            except:
-                self.floor_textures[floor_num] = arcade.Texture.create_empty(
-                    f"floor_{floor_num}",
-                    (SCREEN_WIDTH, SCREEN_HEIGHT)
-                )
-        
-        # Создаем кнопки выбора этажа
-        button_width = 340
-        button_height = 50
-        
-        # Этаж 1
-        floor1_button = {
-            "x": SCREEN_WIDTH // 2 - button_width // 2,
-            "y": SCREEN_HEIGHT // 2 + 60,
-            "width": button_width,
-            "height": button_height,
-            "text": "ЭТАЖ 1: КРЕПОСТНАЯ СТЕНА",
-            "floor": 1,
-            "locked": False
-        }
-        self.button_list.append(floor1_button)
-        
-        # Этаж 2
-        floor2_button = {
-            "x": SCREEN_WIDTH // 2 - button_width // 2,
-            "y": SCREEN_HEIGHT // 2 - 15,
-            "width": button_width,
-            "height": button_height,
-            "text": "ЭТАЖ 2: ЦИТАДЕЛЬ",
-            "floor": 2,
-            "locked": False
-        }
-        self.button_list.append(floor2_button)
-        
-        # Этаж 3
-        floor3_button = {
-            "x": SCREEN_WIDTH // 2 - button_width // 2,
-            "y": SCREEN_HEIGHT // 2 - 90,
-            "width": button_width,
-            "height": button_height,
-            "text": "ЭТАЖ 3: ПОДЗЕМЕЛЬЕ",
-            "floor": 3,
-            "locked": True
-        }
-        self.button_list.append(floor3_button)
-        
-        # Кнопка обучения
-        tutorial_button = {
-            "x": SCREEN_WIDTH // 2 - button_width // 2,
-            "y": SCREEN_HEIGHT // 2 - 165,
-            "width": button_width,
-            "height": 40,
-            "text": "ОБУЧЕНИЕ",
-            "action": "tutorial"
-        }
-        self.button_list.append(tutorial_button)
-        
-        # Кнопка сюжета
-        story_button = {
-            "x": SCREEN_WIDTH // 2 - button_width // 2,
-            "y": SCREEN_HEIGHT // 2 - 210,
-            "width": button_width,
-            "height": 40,
-            "text": "СЮЖЕТ",
-            "action": "story"
-        }
-        self.button_list.append(story_button)
-        
-        # Кнопка возврата
-        back_button = {
-            "x": 20,
-            "y": 20,
-            "width": 140,
-            "height": 40,
-            "text": "НАЗАД",
-            "action": "back"
-        }
-        self.button_list.append(back_button)
-    
-    def on_draw(self):
-        self.clear()
-        
-        # Фон на весь экран
-        arcade.draw_rect_filled(
-            arcade.rect.XYWH(
-                SCREEN_WIDTH // 2, 
-                SCREEN_HEIGHT // 2, 
-                SCREEN_WIDTH, 
-                SCREEN_HEIGHT
-            ),
-            (20, 20, 40)
-        )
-        
-        # Заголовок
-        arcade.draw_text(
-            "ВЫБОР ЭТАЖА", 
-            SCREEN_WIDTH // 2, 
-            SCREEN_HEIGHT - 70,
-            (255, 215, 0),
-            36,
-            anchor_x="center",
-            anchor_y="center",
-            font_name=("Arial", "arial"),
-            bold=True
-        )
-        
-        # Отрисовка кнопок
-        for button in self.button_list:
-            # Определяем цвет кнопки
-            if button.get("locked", False):
-                color = (50, 50, 50, 255)
-                text_color = (100, 100, 100, 255)
-            elif self.pressed_button == button:
-                color = BUTTON_PRESSED
-                text_color = TEXT_COLOR
-            elif self.hovered_button == button:
-                color = BUTTON_HOVER
-                text_color = TEXT_COLOR
-            else:
-                color = BUTTON_NORMAL
-                text_color = TEXT_COLOR
-            
-            # Рисуем кнопку
-            arcade.draw_rect_filled(
-                arcade.rect.XYWH(
-                    button["x"] + button["width"] // 2,
-                    button["y"] + button["height"] // 2,
-                    button["width"],
-                    button["height"]
-                ),
-                color
-            )
-            
-            # Рамка кнопки
-            arcade.draw_rect_outline(
-                arcade.rect.XYWH(
-                    button["x"] + button["width"] // 2,
-                    button["y"] + button["height"] // 2,
-                    button["width"],
-                    button["height"]
-                ),
-                BUTTON_BORDER,
-                2
-            )
-            
-            # Текст кнопки
-            text_size = 16 if "floor" in button else 14
-            arcade.draw_text(
-                button["text"],
-                button["x"] + button["width"] // 2,
-                button["y"] + button["height"] // 2,
-                text_color,
-                text_size,
-                anchor_x="center",
-                anchor_y="center",
-                font_name=("Arial", "arial"),
-                bold=True
-            )
-            
-            # Иконка для заблокированного этажа
-            if button.get("locked", False):
-                arcade.draw_text(
-                    "🔒",
-                    button["x"] + button["width"] - 20,
-                    button["y"] + button["height"] // 2,
-                    text_color,
-                    20,
-                    anchor_x="center",
-                    anchor_y="center",
-                    font_name=("Arial", "arial")
-                )
-        
-        # Если показываем изображение этажа
-        if self.showing_floor_image and self.selected_floor:
-            current_time = time.time()
-            if current_time - self.floor_image_start_time < 2:
-                # Прозрачный черный фон на весь экран
-                arcade.draw_rect_filled(
-                    arcade.rect.XYWH(
-                        SCREEN_WIDTH // 2, 
-                        SCREEN_HEIGHT // 2, 
-                        SCREEN_WIDTH, 
-                        SCREEN_HEIGHT
-                    ),
-                    (0, 0, 0, 220)
-                )
-                
-                texture = self.floor_textures.get(self.selected_floor)
-                if texture and texture.width > 1:
-                    scale = min(
-                        SCREEN_WIDTH / texture.width * 0.8, 
-                        SCREEN_HEIGHT / texture.height * 0.8
-                    )
-                    
-                    texture_rect = arcade.rect.XYWH(
-                        SCREEN_WIDTH // 2,
-                        SCREEN_HEIGHT // 2,
-                        texture.width * scale,
-                        texture.height * scale
-                    )
-                    
-                    arcade.draw_texture_rect(texture, texture_rect)
-                else:
-                    colors = {
-                        1: (139, 69, 19),
-                        2: (105, 105, 105),
-                        3: (47, 79, 79)
-                    }
-                    color = colors.get(self.selected_floor, (128, 128, 128))
-                    
-                    arcade.draw_rect_filled(
-                        arcade.rect.XYWH(
-                            SCREEN_WIDTH // 2,
-                            SCREEN_HEIGHT // 2,
-                            SCREEN_WIDTH * 0.8,
-                            SCREEN_HEIGHT * 0.6
-                        ),
-                        color
-                    )
-                
-                floor_names = {
-                    1: "КРЕПОСТНАЯ СТЕНА",
-                    2: "ЦИТАДЕЛЬ",
-                    3: "ПОДЗЕМЕЛЬЕ"
-                }
-                
-                arcade.draw_text(
-                    f"ЭТАЖ {self.selected_floor}: {floor_names.get(self.selected_floor, '')}",
-                    SCREEN_WIDTH // 2, 
-                    SCREEN_HEIGHT - 90,
-                    (255, 215, 0),
-                    28,
-                    anchor_x="center", 
-                    anchor_y="center",
-                    font_name=("Arial", "arial"),
-                    bold=True
-                )
-                
-                arcade.draw_text(
-                    "ЗАГРУЗКА УРОВНЯ...",
-                    SCREEN_WIDTH // 2, 
-                    70,
-                    (255, 255, 255),
-                    20,
-                    anchor_x="center", 
-                    anchor_y="center",
-                    font_name=("Arial", "arial"),
-                    bold=True
-                )
-                
-            else:
-                # Через 2 секунды переходим к игре или интро
-                self.showing_floor_image = False
-                # Для первого этажа показываем интро, для остальных - сразу игру
-                if self.selected_floor == 1:
-                    intro_view = IntroView(self.selected_floor)
-                    intro_view.setup()
-                    self.window.show_view(intro_view)
-                else:
-                    game_view = GameView()
-                    game_view.setup(self.selected_floor)
-                    self.window.show_view(game_view)
-    
-    def on_mouse_motion(self, x, y, dx, dy):
-        if not self.showing_floor_image:
-            self.hovered_button = None
-            for button in self.button_list:
-                if (button["x"] <= x <= button["x"] + button["width"] and 
-                    button["y"] <= y <= button["y"] + button["height"]):
-                    self.hovered_button = button
-                    break
-    
-    def on_mouse_press(self, x, y, button, modifiers):
-        if not self.showing_floor_image:
-            self.pressed_button = None
-            for btn in self.button_list:
-                if (btn["x"] <= x <= btn["x"] + btn["width"] and 
-                    btn["y"] <= y <= btn["y"] + btn["height"]):
-                    self.pressed_button = btn
-                    break
-    
-    def on_mouse_release(self, x, y, button, modifiers):
-        if self.showing_floor_image:
-            return
-            
-        if self.pressed_button:
-            for btn in self.button_list:
-                if (btn["x"] <= x <= btn["x"] + btn["width"] and 
-                    btn["y"] <= y <= btn["y"] + btn["height"] and 
-                    btn == self.pressed_button):
-                    
-                    if "action" in btn and btn["action"] == "back":
-                        menu_view = MainMenuView()
-                        menu_view.setup()
-                        self.window.show_view(menu_view)
-                    
-                    elif "action" in btn and btn["action"] == "tutorial":
-                        # Переход к обучению
-                        tutorial_view = TutorialView(self)
-                        tutorial_view.setup()
-                        self.window.show_view(tutorial_view)
-                    
-                    elif "action" in btn and btn["action"] == "story":
-                        # Переход к сюжету
-                        story_view = StoryView(self)
-                        story_view.setup()
-                        self.window.show_view(story_view)
-                    
-                    elif "floor" in btn:
-                        if btn.get("locked", False):
-                            pass
-                        else:
-                            self.selected_floor = btn["floor"]
-                            self.showing_floor_image = True
-                            self.floor_image_start_time = time.time()
-                    
-                    break
-        
-        self.pressed_button = None
-
-
-# ============== ИГРОВОЙ УРОВЕНЬ ==============
-class GameView(arcade.View):
-    def __init__(self):
-        super().__init__()
-        self.attack_hitboxes = []
-        self.sword_slashes = []
-        self.keys_held = set()
-        self.background_texture = None
-        self.show_tutorial_button = True
-        
-        # Новые атрибуты для столкновений
-        self.wall_sprites = None
-        self.door_sprites = None
-        self.floor = None
-        self.room_cleared = False
-        self.door_open = False  # ДОБАВЛЕНО: инициализация атрибута
-    
-    def setup(self, floor_number=1):
-        self.floor_number = floor_number
-        self.lives = 3
-        self.room_cleared = False  # ДОБАВЛЕНО: инициализация
-        self.door_open = False     # ДОБАВЛЕНО: инициализация
-        
-        # Загрузка фона
+class BossFloor2(Enemy):
+    def __init__(self, x, y):
         try:
-            self.background_texture = arcade.load_texture("assets/backgrounds/WallFirst.png")
-        except:
-            self.background_texture = None
-        
-        # Инициализация игрока
-        self.player = Player()
+            self.sprite = arcade.Sprite("assets/boss_floor2.png", scale=7)
+        except Exception:
+            self.sprite = arcade.SpriteSolidColor(64, 64, arcade.color.DARK_RED)
+
+        self.sprite.center_x = x
+        self.sprite.center_y = y
+
+        self.arrow_timer = 0.0
+
+        self.hp = 1200
+        self.max_hp = 1200
+        self.speed = 90
+
+        self.slowed = False
+        self.slow_timer = 0.0
+        self.slow_mult = 1.0
+
+        self.state = "walk"   # walk | dash
+        self.dash_timer = 0.0
+        self.dash_dir = (0, 0)
+
+        self.dash_cooldown = 0.0
+
+    @property
+    def alive(self):
+        return self.hp > 0
+
+    def update(self, player, walls, dt, projectile_list):
+        if self.slowed:
+            self.slow_timer -= dt
+            if self.slow_timer <= 0:
+                self.slowed = False
+                self.slow_mult = 1.0
+
+        dx = player.x - self.sprite.center_x
+        dy = player.y - self.sprite.center_y
+
+        # кулдаун рывка
+        if self.dash_cooldown > 0:
+            self.dash_cooldown -= dt
+
+        if self.arrow_timer > 0:
+            self.arrow_timer -= dt
+
+
+        # ───────────── WALK ─────────────
+        if self.state == "walk":
+            dist = math.hypot(dx, dy)
+            if dist > 1:
+                vx = dx / dist * self.speed * (self.slow_mult ** 1.5) * dt
+                vy = dy / dist * self.speed * (self.slow_mult ** 1.5) * dt
+
+                ox = self.sprite.center_x
+                self.sprite.center_x += vx
+                if arcade.check_for_collision_with_list(self.sprite, walls):
+                    self.sprite.center_x = ox
+
+                oy = self.sprite.center_y
+                self.sprite.center_y += vy
+                if arcade.check_for_collision_with_list(self.sprite, walls):
+                    self.sprite.center_y = oy
+
+            # если на одной линии → рывок
+            aligned_x = abs(dx) < 30
+            aligned_y = abs(dy) < 30
+
+            if (aligned_x or aligned_y) and self.dash_cooldown <= 0:
+                if aligned_x:
+                    self.dash_dir = (0, 1 if dy > 0 else -1)
+                else:
+                    self.dash_dir = (1 if dx > 0 else -1, 0)
+
+                self.state = "dash"
+                self.dash_timer = 0.9
+                self.dash_cooldown = 5.0
+
+        # ───────────── DASH ─────────────
+        elif self.state == "dash":
+            self.dash_timer -= dt
+
+            vx = self.dash_dir[0] * 400 * (self.slow_mult ** 1.5) * dt
+            vy = self.dash_dir[1] * 400 * (self.slow_mult ** 1.5) * dt
+
+            old_x = self.sprite.center_x
+            self.sprite.center_x += vx
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_x = old_x
+                self.state = "walk"   # прерываем рывок
+
+            old_y = self.sprite.center_y
+            self.sprite.center_y += vy
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_y = old_y
+                self.state = "walk"
+
+            # разбрасываем стрелы в стороны
+            if self.arrow_timer <= 0:
+                self.spawn_side_arrows(projectile_list)
+                self.arrow_timer = 0.19
+
+
+            if self.dash_timer <= 0:
+                self.state = "walk"
+
+        # флип
+        if dx > 0:
+            self.sprite.scale_x = abs(self.sprite.scale_x)
+        else:
+            self.sprite.scale_x = -abs(self.sprite.scale_x)
+
+    def spawn_side_arrows(self, projectile_list):
+        px, py = self.sprite.center_x, self.sprite.center_y
+
+        if self.dash_dir[0] != 0:
+            dirs = [(0, 1), (0, -1)]
+        else:
+            dirs = [(1, 0), (-1, 0)]
+
+        for dx, dy in dirs:
+            arrow = arcade.Sprite("assets/arrow.png", scale=5)
+            arrow.center_x = px
+            arrow.center_y = py
+            arrow.change_x = dx * 600
+            arrow.change_y = dy * 600
+            arrow.damage = 20
+            arrow.from_enemy = True
+            projectile_list.append(arrow)
+
+
+class BossFloor3(Enemy):
+    def __init__(self, x, y):
+        super().__init__(x, y)
+
+        # sprite (fallback to solid color if missing)
+        try:
+            self.sprite = arcade.Sprite("assets/boss_knight.png", scale=9)
+        except Exception:
+            self.sprite = arcade.SpriteSolidColor(80, 80, arcade.color.DARK_BLUE)
+
+        self.sprite.center_x = x
+        self.sprite.center_y = y
+
+        # stats
+        self.max_hp = 1000
+        self.hp = self.max_hp
+        self.speed = 90
+
+        self.slowed = False
+        self.slow_timer = 0.0
+        self.slow_mult = 1.0
+
+        self.phase = 1
+
+        # shield / block
+        self.blocking = False
+        self.block_timer = 0.0
+
+        # sword (telegraph + hit)
+        self.sword_warning = False
+        self.sword_timer = 0.0
+        self.sword_range = 90
+        self.sword_damage = 22
+        self.sword_cooldown = 1.2
+        self.sword_cd_timer = 0.0
+
+        # circle arrows
+        self.arrow_cd = 0.0
+        self.arrow_interval = 4.0
+
+        # summon tanks
+        self.summon_cd = 10.0
+
+        # dash in phase 2
+        self.dash_cd = 0.0
+        self.dashing = False
+        self.dash_timer = 0.0
+        self.dash_dx = 0.0
+        self.dash_dy = 0.0
+        self.dash_speed = 1600.0
+
+    @property
+    def x(self):
+        return self.sprite.center_x
+
+    @property
+    def y(self):
+        return self.sprite.center_y
+
+    def take_damage(self, dmg):
+        # boss ignores damage while blocking
+        if self.blocking:
+            return
+        self.hp -= dmg
+
+    def update_phase(self, player, walls, dt, enemies, enemy_projectiles):
+        if self.slowed:
+            self.slow_timer -= dt
+            if self.slow_timer <= 0:
+                self.slowed = False
+                self.slow_mult = 1.0
+        # phase switch
+        if self.hp <= self.max_hp * 0.5:
+            self.phase = 2
+
+        # cooldowns
+        self.arrow_cd -= dt
+        self.summon_cd -= dt
+        self.block_timer -= dt
+        self.dash_cd -= dt
+        self.sword_cd_timer -= dt
+
+        # random shield bursts
+        if self.block_timer <= 0 and random.random() < 0.01:
+            self.blocking = True
+            self.block_timer = 1.2
+        elif self.block_timer <= 0:
+            self.blocking = False
+
+        # ===== phase 2 dash: start dash when ready =====
+        if self.phase == 2 and not self.dashing and self.dash_cd <= 0:
+            dx = player.x - self.x
+            dy = player.y - self.y
+            dist = math.hypot(dx, dy)
+            if dist > 300:
+                self.dashing = True
+                self.dash_timer = 0.2
+                self.dash_dx = dx / max(dist, 1)
+                self.dash_dy = dy / max(dist, 1)
+                self.dash_cd = 5.0
+                # reset arrow timer so arrows spawn during dash immediately
+                self.arrow_cd = 0.0
+
+        # handle active dash (movement + collision)
+        if self.dashing:
+            # move with collision checks
+            vx = self.dash_dx * self.dash_speed * self.slow_mult * dt
+            vy = self.dash_dy * self.dash_speed * self.slow_mult * dt
+
+            old_x = self.sprite.center_x
+            self.sprite.center_x += vx
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_x = old_x
+                self.dashing = False
+
+            old_y = self.sprite.center_y
+            self.sprite.center_y += vy
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_y = old_y
+                self.dashing = False
+
+            # spawn side arrows at interval while dashing (handled by arrow_cd, see below)
+            self.dash_timer -= dt
+            if self.dash_timer <= 0:
+                self.dashing = False
+            # return early so other actions (sword) don't trigger mid-dash
+            # but allow arrow spawning below
+        # ===== end dash =====
+
+        # ===== sword telegraph / attack =====
+        dx = player.x - self.x
+        dy = player.y - self.y
+        dist = math.hypot(dx, dy)
+
+        # if close and sword off-cooldown, start telegraph
+        if dist < self.sword_range and not self.sword_warning and self.sword_cd_timer <= 0:
+            self.sword_warning = True
+            self.sword_timer = 0.8
+
+        if self.sword_warning:
+            self.sword_timer -= dt
+            if self.sword_timer <= 0:
+                # perform hit if player still in range
+                self.sword_warning = False
+                self.sword_cd_timer = self.sword_cooldown
+                if dist < self.sword_range:
+                    # direct damage to player
+                    player.hp -= self.sword_damage
+                    # phase2 additional effect: apply burn on player by storing fields
+                    if self.phase == 2:
+                        # put burn on player: duration 4s, dps 2
+                        # Player must have .burn_timer and .burn_dps (see suggested patch below)
+                        if getattr(player, "burn_timer", 0) < 4.0:
+                            player.burn_timer = 4.0
+                            player.burn_dps = 2.0
+
+        # ===== circle arrows =====
+        if self.arrow_cd <= 0:
+            ARROW_SPEED_LOCAL = 450
+            ARROW_COUNT = 6
+            for i in range(ARROW_COUNT):
+                angle = 2 * math.pi * i / ARROW_COUNT
+                dx_a = math.cos(angle)
+                dy_a = math.sin(angle)
+
+                arrow = arcade.Sprite("assets/arrow.png", scale=4)
+                arrow.center_x = self.x
+                arrow.center_y = self.y
+                arrow.change_x = dx_a * ARROW_SPEED_LOCAL
+                arrow.change_y = dy_a * ARROW_SPEED_LOCAL
+                arrow.angle = math.degrees(math.atan2(dy_a, dx_a))
+                arrow.damage = 10
+                arrow.from_enemy = True
+                # append into the window projectile list (enemy_projectiles)
+                enemy_projectiles.append(arrow)
+            self.arrow_cd = self.arrow_interval
+
+        # ===== summon tanks =====
+        if self.summon_cd <= 0:
+            for _ in range(2):
+                tx = int(self.x + random.randint(-60, 60))
+                ty = int(self.y + random.randint(-60, 60))
+                enemies.append(TankEnemy(tx, ty))
+                # also register their sprite into enemy_sprites is handled by loader (if needed)
+            self.summon_cd = 28.0
+
+        # ===== movement when not too close =====
+        if not self.dashing and dist > 80:
+            vx = dx / max(dist, 1) * self.speed * self.slow_mult * dt
+            vy = dy / max(dist, 1) * self.speed * self.slow_mult * dt
+
+            old_x = self.sprite.center_x
+            self.sprite.center_x += vx
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_x = old_x
+
+            old_y = self.sprite.center_y
+            self.sprite.center_y += vy
+            if arcade.check_for_collision_with_list(self.sprite, walls):
+                self.sprite.center_y = old_y
+
+        # flip sprite to face player
+        if dx > 0:
+            self.sprite.scale_x = abs(self.sprite.scale_x)
+        else:
+            self.sprite.scale_x = -abs(self.sprite.scale_x)
+
+        # visual feedback
+        if self.blocking:
+            self.sprite.color = arcade.color.BLUE
+        elif self.phase == 2:
+            self.sprite.color = arcade.color.RED_ORANGE
+        else:
+            self.sprite.color = arcade.color.WHITE
+
+
+# ====================== WINDOW ======================
+class GameWindow(arcade.Window):
+    def __init__(self):
+        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
+        arcade.set_background_color(arcade.color.DARK_SLATE_GRAY)
+        self.current_floor = 1
+
+        # player and spritelists
+        self.player = Player(SCREEN_WIDTH // 2, 120)
         self.player_list = arcade.SpriteList()
         self.player_list.append(self.player.sprite)
-        
-        # Инициализация списков спрайтов
+
         self.enemy_sprites = arcade.SpriteList()
         self.wall_sprites = arcade.SpriteList()
         self.door_sprites = arcade.SpriteList()
-        self.current_enemies = []
-        self.current_projectiles = []
-        self.current_pickups = []
-        
-        # Создаем этаж с сеткой комнат
-        self.floor = Floor(floor_number, size=3)
-        
-        # Загружаем текущую комнату
-        self._load_current_room()
-    
-    def _load_current_room(self):
-        # Очищаем все спрайты
-        self.enemy_sprites.clear()
-        self.wall_sprites.clear()
-        self.door_sprites.clear()
-        self.current_enemies.clear()
-        self.current_projectiles.clear()
-        self.current_pickups.clear()
-        
-        room = self.floor.get_current_room()
-        
-        # Создаем стены (границы комнаты)
-        self._create_walls()
-        
-        # Создаем препятствия (коробки/камни)
-        self._create_obstacles(room)
-        
-        # Создаем двери (пока закрытые)
-        self._create_doors(room)
-        
-        # Спавним врагов
-        self._spawn_enemies(room)
-        
-        # Спавним сердце в случайных комнатах
-        if random.random() > 0.7 and room.type != RoomType.START and room.type != RoomType.BOSS:
-            x, y = self.find_free_position()
-            self.current_pickups.append(Heart(x, y))
-        
-        # Позиция игрока
-        if room.type == RoomType.START:
-            self.player.sprite.center_x = SCREEN_WIDTH // 2
-            self.player.sprite.center_y = 140
-        else:
-            # Определяем, из какой двери пришел игрок
-            self._position_player_at_door()
-        
-        # Определяем, очищена ли комната и открыты ли двери
-        self.room_cleared = len(self.current_enemies) == 0
-        self.door_open = self.room_cleared or room.type == RoomType.START
-        
-        # Обновляем состояние дверей
-        self._update_doors_state()
-    
-    def _create_walls(self):
-        # Верхняя и нижняя стены
-        for x in range(0, SCREEN_WIDTH, WALL_TILE):
-            # Нижняя стена
-            wall = arcade.SpriteSolidColor(WALL_TILE, WALL_TILE, arcade.color.DARK_BROWN)
-            wall.center_x = x + WALL_TILE // 2
-            wall.center_y = WALL_TILE // 2
-            self.wall_sprites.append(wall)
-            
-            # Верхняя стена
-            wall = arcade.SpriteSolidColor(WALL_TILE, WALL_TILE, arcade.color.DARK_BROWN)
-            wall.center_x = x + WALL_TILE // 2
-            wall.center_y = SCREEN_HEIGHT - WALL_TILE // 2
-            self.wall_sprites.append(wall)
-        
-        # Левая и правая стены
-        for y in range(WALL_TILE, SCREEN_HEIGHT - WALL_TILE, WALL_TILE):
-            # Левая стена
-            wall = arcade.SpriteSolidColor(WALL_TILE, WALL_TILE, arcade.color.DARK_BROWN)
-            wall.center_x = WALL_TILE // 2
-            wall.center_y = y + WALL_TILE // 2
-            self.wall_sprites.append(wall)
-            
-            # Правая стена
-            wall = arcade.SpriteSolidColor(WALL_TILE, WALL_TILE, arcade.color.DARK_BROWN)
-            wall.center_x = SCREEN_WIDTH - WALL_TILE // 2
-            wall.center_y = y + WALL_TILE // 2
-            self.wall_sprites.append(wall)
-    
-    def _create_obstacles(self, room):
-        def is_position_allowed(x, y):
-            # Проверяем запретные зоны
-            for fx, fy, r in room.forbidden_zones:
-                if math.sqrt((x - fx) ** 2 + (y - fy) ** 2) < r:
-                    return False
-            
-            # Проверяем расстояние до игрока
-            if room.type == RoomType.START:
-                if math.sqrt((x - SCREEN_WIDTH // 2) ** 2 + (y - 140) ** 2) < 120:
-                    return False
-            
-            return True
-        
-        # Создаем случайные препятствия (коробки)
-        if room.type != RoomType.BOSS:  # В комнате босса меньше препятствий
-            # Уменьшенное количество препятствий
-            if room.type == RoomType.NORMAL:
-                obstacle_count = random.randint(1, 3)  # Было 3-8
-            else:
-                obstacle_count = 1  # Было 2
-            
-            for _ in range(obstacle_count):
-                placed = False
-                attempts = 0
-                
-                while not placed and attempts < 50:
-                    attempts += 1
-                    x = random.randint(120, SCREEN_WIDTH - 120)  # Уменьшены границы
-                    y = random.randint(120, SCREEN_HEIGHT - 120)
-                    
-                    if not is_position_allowed(x, y):
-                        continue
-                    
-                    # Проверяем столкновения с существующими стенами
-                    temp_box = arcade.SpriteSolidColor(50, 50, arcade.color.DARK_BROWN)  # Уменьшен размер
-                    temp_box.center_x = x
-                    temp_box.center_y = y
-                    
-                    if not arcade.check_for_collision_with_list(temp_box, self.wall_sprites):
-                        # Создаем коробку
-                        try:
-                            box = arcade.Sprite("assets/sprites/box.png", scale=0.12)  # Уменьшен масштаб
-                        except:
-                            box = arcade.SpriteSolidColor(50, 50, arcade.color.BROWN)
-                        
-                        box.center_x = x
-                        box.center_y = y
-                        self.wall_sprites.append(box)
-                        placed = True
-    
-    def _create_doors(self, room):
-        margin = 60  # Уменьшено
-        
-        for direction in room.doors:
-            if direction == "up":
-                x = SCREEN_WIDTH // 2
-                y = SCREEN_HEIGHT - margin
-            elif direction == "down":
-                x = SCREEN_WIDTH // 2
-                y = margin
-            elif direction == "left":
-                x = margin
-                y = SCREEN_HEIGHT // 2
-            elif direction == "right":
-                x = SCREEN_WIDTH - margin
-                y = SCREEN_HEIGHT // 2
-            else:
-                continue
-            
-            # Создаем спрайт двери
-            try:
-                door = arcade.Sprite("assets/sprites/door.png", scale=0.08)  # Уменьшен масштаб
-            except:
-                door = arcade.SpriteSolidColor(50, 80, arcade.color.DARK_BROWN)  # Уменьшен размер
-            
-            door.center_x = x
-            door.center_y = y
-            door.direction = direction
-            # Изначально все двери закрыты, состояние обновится позже
-            door.is_open = False
-            self.door_sprites.append(door)
-    
-    def _update_doors_state(self):
-        """Обновляет состояние дверей (открыты/закрыты)"""
+
+        self.screen_shake = 0
+
+        self.projectile_sprites = arcade.SpriteList()  # arrows etc
+        self.pickup_sprites = arcade.SpriteList()      # keys / weapons in room
+
+        # floor / rooms
+        self.floor = Floor(self.current_floor)
+        self.current_pos = self.floor.current_pos
+
+        # runtime entity objects for the current room
+        self.current_enemies = []  # list of Enemy/Boss instances
+
+        # attack visuals (directional sword slashes)
+        self.slashes = []  # dicts with x1,y1,x2,y2,time,width
+
+        # axe swings (circular AoE)
+        self.axe_swings = []  # dicts with x,y,radius,time,damage
+        self.halberd_swings = []  
+        self.hammer_swings = []
+
+
+
+        # input
+        self.keys_held = set()
+
+        # room state
+        self.room_cleared = False
+
+        # transient notice
+        self.notice_text = ""
+        self.notice_timer = 0.0
+
+        # load first room
+        self.load_current_room()
+
+    # ----------------------
+    # HELPERS
+    # ----------------------
+    def try_enter_door(self):
+        # ❗ ЗАПРЕТ: комната не зачищена
+        if not self.room_cleared:
+            self.notice_text = "Defeat all enemies first!"
+            self.notice_timer = 1.5
+            return
+
+    # проверяем двери рядом с игроком
         for door in self.door_sprites:
-            door.is_open = self.door_open
-            # Если дверь - цветной прямоугольник, меняем цвет
-            if isinstance(door, arcade.SpriteSolidColor):
-                if self.door_open:
-                    door.color = arcade.color.LIGHT_GREEN
-                else:
-                    door.color = arcade.color.DARK_BROWN
-    
-    def _spawn_enemies(self, room):
-        if room.type == RoomType.BOSS:
-            # Спавним босса
-            boss = Boss(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 80)  # Уменьшена позиция
-            self.current_enemies.append(boss)
-            self.enemy_sprites.append(boss.sprite)
-        else:
-            # Спавним обычных врагов
-            for spawn in room.enemy_spawns:
-                x, y = self.find_free_position(min_y=150)  # Уменьшено
-                enemy = Enemy(x, y)
-                self.current_enemies.append(enemy)
-                self.enemy_sprites.append(enemy.sprite)
-    
-    def _position_player_at_door(self):
-        # Эта функция должна определять, из какой двери пришел игрок
-        # Для простоты всегда ставим игрока в центре снизу
-        self.player.sprite.center_x = SCREEN_WIDTH // 2
-        self.player.sprite.center_y = 140  # Уменьшено
-    
-    def find_free_position(self, min_x=120, max_x=None, min_y=120, max_y=None, tries=50):
-        if max_x is None:
-            max_x = SCREEN_WIDTH - 120  # Уменьшено
-        if max_y is None:
-            max_y = SCREEN_HEIGHT - 120  # Уменьшено
+            if arcade.get_distance_between_sprites(self.player.sprite, door) < 90:
+                direction = door.direction
+                room = self.floor.get_current_room()
+
+                if direction in room.doors:
+                    new_pos = room.doors[direction]
+                    self.floor.current_pos = new_pos
+                    self.load_current_room()
+                    return
+
+
+    def try_activate_shield(self):
+        p = self.player
+
+        if not p.has_shield:
+            return
+
+        if not p.shield_ready:
+            return
         
+        p.parry_active = True
+        p.parry_timer = p.parry_window
+
+        # уничтожаем стрелы врагов
+        for arrow in self.projectile_sprites[:]:
+            if not getattr(arrow, "from_enemy", False):
+                continue
+
+            dx = arrow.center_x - p.x
+            dy = arrow.center_y - p.y
+            dist = math.hypot(dx, dy)
+
+            if dist <= p.shield_radius:
+                arrow.remove_from_sprite_lists()
+
+        # уходим на перезарядку
+        p.shield_ready = False
+
+        room = self.floor.get_current_room()
+        if room.type == "boss":
+            p.shield_time_cooldown = 7.0
+        else:
+            p.shield_room_cooldown = 2
+    
+    def find_free_position(self, min_x=150, max_x=None, min_y=150, max_y=None, tries=100):
+        if max_x is None:
+            max_x = SCREEN_WIDTH - 150
+        if max_y is None:
+            max_y = SCREEN_HEIGHT - 150
+
         for _ in range(tries):
             x = random.randint(min_x, max_x)
             y = random.randint(min_y, max_y)
-            
-            # Создаем временный спрайт для проверки столкновений
-            temp = arcade.SpriteSolidColor(32, 32, arcade.color.RED)  # Уменьшен размер
-            temp.center_x = x
-            temp.center_y = y
-            
-            if not arcade.check_for_collision_with_list(temp, self.wall_sprites):
+
+            dummy = arcade.SpriteSolidColor(90, 90, arcade.color.RED)
+            dummy.center_x = x
+            dummy.center_y = y
+
+            if not arcade.check_for_collision_with_list(dummy, self.wall_sprites) and \
+               not arcade.check_for_collision_with_list(dummy, self.door_sprites) and \
+               not arcade.check_for_collision_with_list(dummy, self.pickup_sprites):
                 return x, y
-        
-        # Если не нашли свободное место, возвращаем центр
+
         return SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
-    
+
+    # ----------------------
+    # room loading / spawn
+    # ----------------------
+    def load_current_room(self):
+        # clear previous
+        self.enemy_sprites.clear()
+        self.wall_sprites.clear()
+        self.door_sprites.clear()
+        self.pickup_sprites.clear()
+        self.projectile_sprites.clear()
+        self.current_enemies.clear()
+        self.slashes.clear()
+        self.axe_swings.clear()
+        self.room_cleared = False
+        self.notice_text = ""
+        self.notice_timer = 0.0
+
+        room = self.floor.get_current_room()
+
+        # forbidden zones for this room are already populated by Floor during generate()
+        # ensure player spawn zone exists
+        room.add_forbidden_zone(SCREEN_WIDTH // 2, 190, 200)
+
+        # spawn walls: border + some rocks
+        # top/bottom rows
+        for x in range(0, SCREEN_WIDTH, WALL_TILE):
+            # bottom
+            rock = arcade.SpriteSolidColor(WALL_TILE, WALL_TILE, arcade.color.DARK_BROWN)
+            rock.is_rock = False
+            rock.is_wall = True
+            rock.center_x = x + WALL_TILE // 2
+            rock.center_y = WALL_TILE // 2
+            self.wall_sprites.append(rock)
+            # top
+            rock2 = arcade.SpriteSolidColor(WALL_TILE, WALL_TILE, arcade.color.DARK_BROWN)
+            rock.is_rock = False
+            rock.is_wall = True
+            rock2.center_x = x + WALL_TILE // 2
+            rock2.center_y = SCREEN_HEIGHT - WALL_TILE // 2
+            self.wall_sprites.append(rock2)
+        # left/right
+        for y in range(WALL_TILE, SCREEN_HEIGHT - WALL_TILE, WALL_TILE):
+            rock = arcade.SpriteSolidColor(WALL_TILE, WALL_TILE, arcade.color.DARK_BROWN)
+            rock.is_rock = False
+            rock.is_wall = True
+            rock.center_x = WALL_TILE // 2
+            rock.center_y = y + WALL_TILE // 2
+            self.wall_sprites.append(rock)
+            rock2 = arcade.SpriteSolidColor(WALL_TILE, WALL_TILE, arcade.color.DARK_BROWN)
+            rock.is_rock = False
+            rock.is_wall = True
+            rock2.center_x = SCREEN_WIDTH - WALL_TILE // 2
+            rock2.center_y = y + WALL_TILE // 2
+            self.wall_sprites.append(rock2)
+
+        # spawn obstacles inside room (a few rocks), avoid forbidden zones
+        def is_position_allowed(x, y, forbidden):
+            for fx, fy, r in forbidden:
+                if abs(x - fx) < r and abs(y - fy) < r:
+                    return False
+            return True
+
+        attempts = 0
+        spawned = 0
+        if room.type not in ('boss', 'start', 'treasure'):
+            while spawned < 6 and attempts < 10:
+                attempts += 1
+                x = random.randint(180, SCREEN_WIDTH - 180)
+                y = random.randint(180, SCREEN_HEIGHT - 180)
+
+                if not is_position_allowed(x, y, room.forbidden_zones):
+                    continue
+
+                rock = arcade.Sprite("assets/rock.png", scale=6.0)
+                rock.center_x = x
+                rock.center_y = y
+
+                rock.is_rock = True        
+                rock.is_wall = False
+
+                self.wall_sprites.append(rock)
+
+        # spawn doors (sprites) - do this early so find_free_position avoids doors
+        margin = 80
+
+        def spawn_door(x, y, direction):
+            # create a door sprite (simple solid color if asset missing)
+            try:
+                d = arcade.Sprite("assets/door.png", scale=6.0)
+            except Exception:
+                d = arcade.SpriteSolidColor(120, 160, arcade.color.DARK_BROWN)
+            d.center_x = x
+            d.center_y = y
+            d.direction = direction
+            # make an appropriate hit box (using default is fine)
+            self.door_sprites.append(d)
+
+        if room.doors.get("up") is not None:
+            spawn_door(SCREEN_WIDTH // 2, SCREEN_HEIGHT - margin, "up")
+        if room.doors.get("down") is not None:
+            spawn_door(SCREEN_WIDTH // 2, margin, "down")
+        if room.doors.get("left") is not None:
+            spawn_door(margin, SCREEN_HEIGHT // 2, "left")
+        if room.doors.get("right") is not None:
+            spawn_door(SCREEN_WIDTH - margin, SCREEN_HEIGHT // 2, "right")
+
+        # spawn enemies from room.enemy_spawns (but only after walls & doors exist)
+        if room.type == "boss":
+            bx = SCREEN_WIDTH // 2
+            by = SCREEN_HEIGHT // 2 + 60
+
+            if self.current_floor == 1:
+                boss = Boss(bx, by)
+            elif self.current_floor == 2:
+                boss = BossFloor2(bx, by)
+            elif self.current_floor == 3:
+                boss = BossFloor3(bx, by)
+
+            self.current_enemies.append(boss)
+            self.enemy_sprites.append(boss.sprite)
+        else:
+            for spawn in room.enemy_spawns:
+                x, y = self.find_free_position()
+                roll = random.random()
+                if self.current_floor == 1:
+                    if roll < 0.5:
+                        e = Enemy(x, y)
+                    elif roll < 0.7:
+                        e = FastEnemy(x, y)
+                    elif roll < 0.9:
+                        e = TankEnemy(x, y)
+                    else:
+                        e = RangedEnemy(x, y)
+                
+                if self.current_floor == 2:
+                    if roll < 0.35:
+                        e = EliteRunner(x, y)
+                    elif roll < 0.65:
+                        e = EliteShooter(x, y)
+                    elif roll < 0.85:
+                        e = FastEnemy(x, y)
+                    else:
+                        e = Enemy(x, y)
+
+                if self.current_floor == 3:
+                    roll = random.random()
+                    if roll < 0.25:
+                        e = EliteTankFloor3(x, y)
+                    elif roll < 0.4:
+                        e = EliteArcherFloor3(x, y)
+                    elif roll < 0.5:
+                        e = TankEnemy(x, y)
+                    elif roll < 0.75:
+                        e = EliteShooter(x, y)
+                    else:
+                        e = FastEnemy(x, y)
+
+                self.current_enemies.append(e)
+                self.enemy_sprites.append(e.sprite)
+
+        # if this is a treasure room and it's unlocked, spawn weapons as pickups
+        if room.type == "treasure" and room.treasure_unlocked:
+            # spawn axe pickup
+            ax = arcade.SpriteSolidColor(28, 28, arcade.color.DARK_ORANGE)
+            ax.center_x, ax.center_y = self.find_free_position()
+            ax.pickup_type = "axe"
+            self.pickup_sprites.append(ax)
+
+            # spawn bow pickup
+            bw = arcade.SpriteSolidColor(28, 28, arcade.color.DARK_GREEN)
+            bw.center_x, bw.center_y = self.find_free_position()
+            bw.pickup_type = "bow"
+            self.pickup_sprites.append(bw)
+
+            if self.current_floor >= 2:
+                shield = arcade.SpriteSolidColor(28, 28, arcade.color.DARK_GREEN)
+                shield.center_x, shield.center_y = self.find_free_position()
+                shield.pickup_type = "shield"
+                self.pickup_sprites.append(shield)
+
+                halberd = arcade.SpriteSolidColor(32, 32, arcade.color.LIGHT_BLUE)
+                halberd.center_x, halberd.center_y = self.find_free_position()
+                halberd.pickup_type = "halberd"
+                self.pickup_sprites.append(halberd)
+
+                roll = random.random()
+                if roll > 0.8:
+                    hm = arcade.SpriteSolidColor(32, 32, arcade.color.LIGHT_BLUE)
+                    hm.center_x, halberd.center_y = self.find_free_position()
+                    hm.pickup_type = "hammer"
+                    self.pickup_sprites.append(hm)
+            
+
+
+        # room cleared flag
+        self.room_cleared = len(self.current_enemies) == 0
+
+        # teleport player to entrance side (simple)
+        self.player.sprite.center_x = SCREEN_WIDTH // 2
+        self.player.sprite.center_y = 190
+        
+        player = self.player
+
+        if player.has_shield and not player.shield_ready:
+            player.shield_room_cooldown -= 1
+            if player.shield_room_cooldown <= 0:
+                player.shield_ready = True
+
+
+    # ----------------------
+    # drawing
+    # ----------------------
     def on_draw(self):
         self.clear()
-        
-        # Фон на весь экран
-        if self.background_texture:
-            arcade.draw_texture_rect(
-                self.background_texture,
-                arcade.rect.XYWH(
-                    SCREEN_WIDTH // 2,
-                    SCREEN_HEIGHT // 2,
-                    SCREEN_WIDTH,
-                    SCREEN_HEIGHT
-                )
-            )
-        else:
-            arcade.draw_lbwh_rectangle_filled(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, arcade.color.DARK_SLATE_GRAY)
-        
-        # Отрисовка объектов
-        self.wall_sprites.draw()  # Стены и коробки
-        self.door_sprites.draw()  # Двери
-        self.player_list.draw()
-        
-        for heart in self.current_pickups:
-            heart.draw()
-            
-        for proj in list(self.current_projectiles):
-            proj.draw()
-            
-        self.enemy_sprites.draw()
-        
-        for slash in self.sword_slashes:
-            arcade.draw_line(
-                slash["x1"], slash["y1"],
-                slash["x2"], slash["y2"],
-                arcade.color.WHITE,
-                4  # Уменьшена толщина
+
+        # floor background
+        arcade.draw_lbwh_rectangle_filled(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, arcade.color.DARK_SLATE_GRAY)
+
+        # walls, doors, enemies, pickups, player, projectiles
+        self.wall_sprites.draw(pixelated=True)
+        self.door_sprites.draw(pixelated=True)
+        self.enemy_sprites.draw(pixelated=True)
+        self.pickup_sprites.draw(pixelated=True)
+        self.projectile_sprites.draw(pixelated=True)
+        self.player_list.draw(pixelated=True)
+
+        if self.player.has_shield and self.player.shield_ready:
+            arcade.draw_circle_outline(
+                self.player.x,
+                self.player.y,
+                self.player.shield_radius,
+                arcade.color.CYAN,
+                3
             )
 
-        # Кнопка обучения
-        tutorial_button_x = SCREEN_WIDTH - 80  # Уменьшено
-        tutorial_button_y = SCREEN_HEIGHT - 25  # Уменьшено
-        
-        arcade.draw_circle_filled(tutorial_button_x, tutorial_button_y, 16, (87, 76, 41))  # Уменьшен радиус
-        arcade.draw_circle_outline(tutorial_button_x, tutorial_button_y, 16, BUTTON_BORDER, 1)  # Уменьшен радиус
-        arcade.draw_text("?", tutorial_button_x, tutorial_button_y, 
-                        TEXT_COLOR, 20, anchor_x="center", anchor_y="center",  # Уменьшен размер
-                        font_name=("Arial", "arial"), bold=True)
-        
-        arcade.draw_text("F1", tutorial_button_x, tutorial_button_y - 30,  # Уменьшено
-                        arcade.color.LIGHT_GRAY, 14, anchor_x="center", anchor_y="center",  # Уменьшен размер
-                        font_name=("Arial", "arial"))
+        # draw slashes
+        for s in self.slashes:
+            arcade.draw_line(s["x1"], s["y1"], s["x2"], s["y2"], arcade.color.WHITE, s["width"])
+
+        # draw axe swings (circle)
+        for a in self.axe_swings:
+            arcade.draw_circle_outline(a["x"], a["y"], a["radius"], arcade.color.ORANGE, 3)
+
+        for h in self.halberd_swings:
+            arcade.draw_arc_outline(
+                h["x"],
+                h["y"],
+                h["radius"] * 2,
+                h["radius"] * 2,
+                arcade.color.LIGHT_BLUE,
+                h["angle"] - h["arc"] / 2,
+                h["angle"] + h["arc"] / 2,
+                4
+            )
+
+        for h in self.hammer_swings:
+            if h["phase"] == "windup":
+                arcade.draw_circle_outline(
+                    h["x"], h["y"],
+                    h["radius"],
+                    arcade.color.ORANGE,
+                    3
+                )
+            else:
+                arcade.draw_circle_filled(
+                    h["x"], h["y"],
+                    h["radius"],
+                    (*arcade.color.ORANGE[:3], 120)
+                )
+
 
         # HUD
-        room = self.floor.get_current_room()
-        room_type_text = ""
-        if room.type == RoomType.START:
-            room_type_text = "СТАРТ"
-        elif room.type == RoomType.BOSS:
-            room_type_text = "БОСС"
-        else:
-            room_type_text = f"КОМНАТА {self.floor.current_pos[0] + 1}-{self.floor.current_pos[1] + 1}"
-        
-        arcade.draw_text(f"HP: {int(self.player.hp)}/{self.player.max_hp}", 15, SCREEN_HEIGHT - 30, 
-                       arcade.color.WHITE, 22)  # Уменьшен размер
-        
-        # Жизни сердечками
-        heart_spacing = 32  # Уменьшено
-        for i in range(self.lives):
-            matrix_w = len(HEART_MATRIX[0]) * PIXEL
-            matrix_h = len(HEART_MATRIX) * PIXEL
-            x = 20 + matrix_w // 2 + i * heart_spacing
-            y = SCREEN_HEIGHT - 70 - matrix_h // 2  # Уменьшено
-            top_left_x = x - matrix_w // 2
-            top_left_y = y + matrix_h // 2
-            draw_pixel_matrix(HEART_MATRIX, top_left_x, top_left_y, arcade.color.RED)
-        
-        arcade.draw_text(room_type_text, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30,
-                       arcade.color.WHITE, 20, anchor_x="center")  # Уменьшен размер
-        
-        arcade.draw_text(f"Этаж {self.floor_number}", SCREEN_WIDTH - 130, SCREEN_HEIGHT - 30,  # Уменьшено
-                       arcade.color.WHITE, 20)  # Уменьшен размер
+        arcade.draw_text(f"HP: {int(self.player.hp)}/{self.player.max_hp}", 12, SCREEN_HEIGHT - 28, arcade.color.BLACK, 18)
+        arcade.draw_text(f"Room: {self.floor.current_pos}", 12, SCREEN_HEIGHT - 54, arcade.color.BLACK, 14)
+        arcade.draw_text(f"Keys: {self.player.keys}", 12, SCREEN_HEIGHT - 78, arcade.color.GOLD, 14)
+        arcade.draw_text(f"Weapon: {self.player.weapon}", 12, SCREEN_HEIGHT - 102, arcade.color.LIGHT_GRAY, 14)
+        if self.player.has_shield and not self.player.shield_ready:
+            room = self.floor.get_current_room()
+            if room.type == "boss":
+                arcade.draw_text(
+                    f"Shield CD: {int(self.player.shield_time_cooldown)}s",
+                    12, SCREEN_HEIGHT - 126,
+                    arcade.color.CYAN, 14
+                )
 
-        # Здоровье босса
-        if any(isinstance(e, Boss) for e in self.current_enemies):
-            boss = next(e for e in self.current_enemies if isinstance(e, Boss))
-            bar_w = 450  # Уменьшено
-            x = (SCREEN_WIDTH - bar_w) // 2
-            y = SCREEN_HEIGHT - 60  # Уменьшено
-            ratio = max(0.0, boss.hp / boss.max_hp)
-            arcade.draw_lbwh_rectangle_filled(x, y - 7, int(bar_w * ratio), 14, arcade.color.RED)  # Уменьшена высота
-            arcade.draw_lrbt_rectangle_outline(x, x + bar_w, y - 7, y + 7, arcade.color.WHITE)  # Уменьшена высота
-            
-            # Фаза босса
-            arcade.draw_text(f"Фаза: {boss.phase}", x + bar_w // 2, y - 30,  # Уменьшено
-                           arcade.color.YELLOW, 16, anchor_x="center")  # Уменьшен размер
+
+        arcade.draw_text(
+                f"Floor: {self.current_floor}",
+                SCREEN_WIDTH - 160, SCREEN_HEIGHT - 28,
+                arcade.color.BLACK, 16
+                        )
+
+
+        for e in self.current_enemies:
+            if isinstance(e, Boss):
+                arcade.draw_text(
+                    f"PHASE {e.phase}",
+                    e.x - 30, e.y + 60,
+                    arcade.color.RED, 14
+                )
         
-        # Подсказка для дверей
-        if self.door_open and self.floor.get_current_room().type != RoomType.BOSS:
-            arcade.draw_text("E - войти в дверь", SCREEN_WIDTH // 2, 40,  # Уменьшено
-                           arcade.color.LIGHT_GREEN, 18, anchor_x="center")  # Уменьшен размер
+        for e in self.current_enemies:
+            if isinstance(e, BossFloor3) and e.sword_warning:
+                dx = self.player.x - e.x
+                dy = self.player.y - e.y
+
+                angle = math.degrees(math.atan2(dy, dx))
     
-    def on_update(self, dt):
-        # Движение игрока с проверкой столкновений
-        dx = dy = 0
+                arcade.draw_arc_outline(
+                    e.x,
+                    e.y,
+                    e.sword_range * 2,
+                    e.sword_range * 2,
+                    arcade.color.RED,
+                    angle - 60,
+                    angle + 60,
+                    5
+                )
+        
+        for e in self.current_enemies:
+            if isinstance(e, EliteTankFloor3) and e.is_slamming:
+                arcade.draw_circle_outline(
+                    e.x,
+                    e.y,
+                    e.slam_radius,
+                    arcade.color.RED,
+                    4
+                )
+        
+            if isinstance(e, EliteArcherFloor3) and e.in_volley:
+                arcade.draw_circle_outline(
+                    e.x,
+                    e.y,
+                    30,
+                    arcade.color.ORANGE,
+                    3       
+                )
+            if getattr(e, "stunned", False):
+                arcade.draw_circle_outline(
+                    e.x,
+                    e.y + 20,
+                    20,
+                arcade.color.YELLOW,
+                    2
+                )
+            if getattr(e, "slowed", False):
+                arcade.draw_circle_outline(
+                    e.x,
+                    e.y,
+                    36,
+                    arcade.color.BLUE,
+                    3
+                )
 
+
+
+
+
+        # notice text
+        if self.notice_timer > 0 and self.notice_text:
+            arcade.draw_text(self.notice_text, SCREEN_WIDTH//2 - 200, SCREEN_HEIGHT - 40, arcade.color.YELLOW, 20)
+
+        if self.room_cleared:
+            arcade.draw_text("Press E near a door to enter", SCREEN_WIDTH//2 - 160, 24, arcade.color.WHITE, 14)
+
+    # ----------------------
+    # update
+    # ----------------------
+    def on_update(self, dt):
+        # movement - read keys
+        if self.player.dash_time > 0:
+            self.player.dash_time -= dt
+
+            vx = self.player.dash_dx * self.player.dash_speed * dt
+            vy = self.player.dash_dy * self.player.dash_speed * dt
+
+            old_x = self.player.sprite.center_x
+            self.player.sprite.center_x += vx
+            if arcade.check_for_collision_with_list(self.player.sprite, self.wall_sprites):
+                self.player.sprite.center_x = old_x
+
+            old_y = self.player.sprite.center_y
+            self.player.sprite.center_y += vy
+            if arcade.check_for_collision_with_list(self.player.sprite, self.wall_sprites):
+                self.player.sprite.center_y = old_y
+
+        dx = dy = 0
         if arcade.key.W in self.keys_held:
             dy += 1
         if arcade.key.S in self.keys_held:
@@ -1817,209 +1708,517 @@ class GameView(arcade.View):
         if arcade.key.D in self.keys_held:
             dx += 1
 
+        # normalize
         if dx or dy:
             length = math.hypot(dx, dy)
-            dx /= length
-            dy /= length
+            if length == 0:
+                length = 1
+            nx = dx / length
+            ny = dy / length
 
-            # Двигаем по X и проверяем столкновения
+            # move with collision separately per axis
             old_x = self.player.sprite.center_x
-            self.player.sprite.center_x += dx * self.player.speed * dt
+            self.player.sprite.center_x += nx * self.player.speed * dt
             if arcade.check_for_collision_with_list(self.player.sprite, self.wall_sprites):
                 self.player.sprite.center_x = old_x
 
-            # Двигаем по Y и проверяем столкновений
             old_y = self.player.sprite.center_y
-            self.player.sprite.center_y += dy * self.player.speed * dt
+            self.player.sprite.center_y += ny * self.player.speed * dt
             if arcade.check_for_collision_with_list(self.player.sprite, self.wall_sprites):
                 self.player.sprite.center_y = old_y
 
-            # Ограничение по экрану (на всякий случай)
-            self.player.sprite.center_x = max(20, min(SCREEN_WIDTH - 20, self.player.sprite.center_x))
-            self.player.sprite.center_y = max(20, min(SCREEN_HEIGHT - 20, self.player.sprite.center_y))
-
-            # Поворот спрайта
-            if dx > 0:
+            # flip sprite
+            if nx > 0:
                 self.player.sprite.scale_x = abs(self.player.sprite.scale_x)
-            elif dx < 0:
+            elif nx < 0:
                 self.player.sprite.scale_x = -abs(self.player.sprite.scale_x)
 
-        self.player.update(dt)
+        # update player timers
+        self.player.update(dt, self.keys_held)
+        p = self.player
+        room = self.floor.get_current_room()
 
-        # Обновляем врагов с проверкой столкновений
+        if p.has_shield and not p.shield_ready:
+            if room.type == "boss":
+                p.shield_time_cooldown -= dt
+                if p.shield_time_cooldown <= 0:
+                    p.shield_ready = True
+
+
+        # update enemies
         for e in list(self.current_enemies):
             if isinstance(e, Boss):
-                e.update(self.player, dt, self.current_projectiles, self.wall_sprites)
+                e.update_phase(self.player, self.wall_sprites, dt)
+            elif isinstance(e, BossFloor2):
+                e.update(self.player, self.wall_sprites, dt, self.projectile_sprites)
+            elif isinstance(e, BossFloor3):
+                new_enemies = []
+                e.update_phase(
+                    player=self.player,
+                    walls=self.wall_sprites,
+                    dt=dt,
+                    enemies=new_enemies,                 # ← сюда босс добавляет танков
+                    enemy_projectiles=self.projectile_sprites   # ← сюда босс добавляет стрелы
+                )
+                if len(new_enemies) > 0:
+                    for ne in new_enemies:
+                        self.current_enemies.append(ne)
+                        self.enemy_sprites.append(ne.sprite)
+                    new_enemies.clear()
+            elif isinstance(e, RangedEnemy):
+                e.update(self.player, self.wall_sprites, dt, self.projectile_sprites)
+            elif isinstance(e, EliteShooter):
+                e.update(self.player, self.wall_sprites, dt, self.projectile_sprites)
+            elif isinstance(e, EliteArcherFloor3):
+                e.update(self.player, self.wall_sprites, dt, self.projectile_sprites)
             else:
-                e.update(self.player, dt, self.wall_sprites)
+                e.update(self.player, self.wall_sprites, dt)
+            # simple contact damage
+            if abs(e.x - self.player.x) < 28 and abs(e.y - self.player.y) < 28:
+                self.player.hp -= 20 * dt
 
-            # Контактный урон
-            if abs(e.x - self.player.x) < 25 and abs(e.y - self.player.y) < 25:  # Уменьшено
-                self.player.hp -= 30 * dt
+            if not e.alive:
+                # remove
+                try:
+                    self.current_enemies.remove(e)
+                except ValueError:
+                    pass
+                try:
+                    self.enemy_sprites.remove(e.sprite)
+                except ValueError:
+                    pass
 
-            if e.hp <= 0:
-                self.current_enemies.remove(e)
-                self.enemy_sprites.remove(e.sprite)
+        # update projectiles (arrows)
+        for proj in list(self.projectile_sprites):
+            proj.center_x += proj.change_x * dt
+            proj.center_y += proj.change_y * dt
 
-        # Обновляем снаряды
-        for proj in list(self.current_projectiles):
-            proj.update(dt)
-            if proj.x < -150 or proj.x > SCREEN_WIDTH + 150 or proj.y < -150 or proj.y > SCREEN_HEIGHT + 150:  # Уменьшено
-                if proj in self.current_projectiles:
-                    self.current_projectiles.remove(proj)
+            # collision with enemies (ТОЛЬКО для стрел игрока)d
+            if not getattr(proj, "from_enemy", False):
+                for e in list(self.current_enemies):
+                    if arcade.check_for_collision(proj, e.sprite):
+                        e.hp -= getattr(proj, "damage", 40)
+                        try:
+                                self.projectile_sprites.remove(proj)
+                        except ValueError:
+                            pass
+                        break
+
+            if getattr(proj, "from_enemy", False):
+                if arcade.check_for_collision(proj, self.player.sprite):
+
+                    if self.player.parry_active:
+
+                        proj.from_enemy = False
+                        proj.change_x *= -1
+                        proj.change_y *= -1
+                        proj.damage = int(proj.damage * 1.5)
+
+                        proj.color = arcade.color.CYAN
+
+                        self.player.parry_active = False
+                        self.player.parry_timer = 0
+                    else:
+                        self.player.hp -= getattr(proj, "damage", 15)
+                        self.projectile_sprites.remove(proj)
+
+                    continue
+
+
+
+            # collision with walls
+            if arcade.check_for_collision_with_list(proj, self.wall_sprites):
+                try:
+                    self.projectile_sprites.remove(proj)
+                except ValueError:
+                    pass
                 continue
             
-            # Столкновение снаряда с игроком
-            if abs(proj.x - self.player.x) < 12 and abs(proj.y - self.player.y) < 12:  # Уменьшено
-                self.player.hp -= proj.damage
-                if proj in self.current_projectiles:
-                    self.current_projectiles.remove(proj)
-            
-            # Столкновение снаряда со стенами
-            temp_proj = arcade.SpriteSolidColor(6, 6, arcade.color.YELLOW)  # Уменьшен размер
-            temp_proj.center_x = proj.x
-            temp_proj.center_y = proj.y
-            if arcade.check_for_collision_with_list(temp_proj, self.wall_sprites):
-                if proj in self.current_projectiles:
-                    self.current_projectiles.remove(proj)
 
-        # Подбор предметов
-        for heart in list(self.current_pickups):
-            if abs(heart.x - self.player.x) < 25 and abs(heart.y - self.player.y) < 25:  # Уменьшено
-                self.player.max_hp += 20
-                self.player.hp = min(self.player.max_hp, self.player.hp + 40)
-                self.current_pickups.remove(heart)
+            # out of bounds
+            if proj.center_x < -200 or proj.center_x > SCREEN_WIDTH + 200 or proj.center_y < -200 or proj.center_y > SCREEN_HEIGHT + 200:
+                try:
+                    self.projectile_sprites.remove(proj)
+                except ValueError:
+                    pass
 
-        # Проверка зачистки комнаты
-        if not self.current_enemies and not self.room_cleared:
-            self.room_cleared = True
-            self.door_open = True
-            self._update_doors_state()
-        
-        # Обновляем анимацию удара
-        for slash in self.sword_slashes[:]:
-            slash["time"] -= dt
-            if slash["time"] <= 0:
-                self.sword_slashes.remove(slash)
+        # project slashes lifetime
+        for s in list(self.slashes):
+            s["time"] -= dt
+            if s["time"] <= 0:
+                self.slashes.remove(s)
 
-        # Проверка смерти игрока
-        if self.player.hp <= 0:
-            self.lives -= 1
-            
-            if self.lives > 0:
-                # Перезагружаем текущую комнату
-                self.player.hp = self.player.max_hp
-                self._load_current_room()
+        # axe swings lifetime and apply damage once
+        for a in list(self.axe_swings):
+            # apply damage to enemies within radius immediately when created
+            if a.get("applied", False) is False:
+                for e in list(self.current_enemies):
+                    if distance((e.x, e.y), (a["x"], a["y"])) <= a["radius"]:
+                        e.hp -= a.get("damage", 60)
+                a["applied"] = True
+
+            a["time"] -= dt
+            if a["time"] <= 0:
+                self.axe_swings.remove(a)
+
+        for h in list(self.halberd_swings):
+            if not h["applied"]:
+                for e in self.current_enemies:
+                    dx = e.x - h["x"]
+                    dy = e.y - h["y"]
+                    dist = math.hypot(dx, dy)
+
+                    if dist > h["radius"]:
+                        continue
+
+                    enemy_angle = math.degrees(math.atan2(dy, dx))
+                    delta = (enemy_angle - h["angle"] + 180) % 360 - 180
+
+                    if abs(delta) <= h["arc"] / 2:
+                        e.hp -= h["damage"]
+
+                h["applied"] = True
+
+            h["time"] -= dt
+            if h["time"] <= 0:
+                self.halberd_swings.remove(h)
+
+        for h in list(self.hammer_swings):
+            h["timer"] -= dt
+
+            if h["phase"] == "windup" and h["timer"] <= HAMMER_IMPACT:
+                # ───── МОМЕНТ УДАРА ─────
+                h["phase"] = "impact"
+
+
+                # урон врагам
+                for e in self.current_enemies:
+                    if arcade.get_distance_between_sprites(e.sprite, self.player.sprite) <= h["radius"]:
+                        e.hp -= h["damage"]
+
+                    # обычные враги — стан
+                        if getattr(e, "can_be_stunned", True):                         
+                            e.stunned = True
+                            e.stun_timer = HAMMER_STUN_TIME
+
+                        else:
+                            e.slowed = True
+                            e.slow_timer = HAMMER_BOSS_SLOW_TIME
+                            e.slow_mult = HAMMER_BOSS_SLOW_MULT
+
+
+                # ломаем камни
+                for obj in self.wall_sprites[:]:
+                    if not getattr(obj, "is_rock", False):
+                        continue
+
+                    if arcade.get_distance_between_sprites(obj, self.player.sprite) <= h["radius"]:
+                        obj.remove_from_sprite_lists()
+            if h["timer"] <= 0:
+                self.hammer_swings.remove(h)
+
+
+
+
+        # pickups: keys and weapons
+        for p in list(self.pickup_sprites):
+            if arcade.check_for_collision(self.player.sprite, p):
+                ptype = getattr(p, "pickup_type", "key")
+                if ptype == "key":
+                    self.player.keys += 1
+                    self.notice_text = "Picked up a key!"
+                    self.notice_timer = 2.0
+                elif ptype == "axe":
+                    self.player.weapon = "axe"
+                    self.notice_text = "Picked up: Axe"
+                    self.notice_timer = 2.0
+                elif ptype == "bow":
+                    self.player.weapon = "bow"
+                    self.notice_text = "Picked up: Bow"
+                    self.notice_timer = 2.0
+                elif ptype == "shield":
+                    self.player.has_shield = True
+                    self.notice_text = "Picked up: Shield"
+                    self.notice_timer = 2.0
+                elif ptype == "halberd":
+                    self.player.weapon = "halberd"
+                    self.notice_text = "Picked up: Halberd"
+                    self.notice_timer = 2.0
+
+                elif ptype == "hammer":
+                    self.player.weapon = "hammer"
+                    self.notice_text = "Picked up: Battle Hammer"
+                    self.notice_timer = 2.0
+
+                try:
+                    self.pickup_sprites.remove(p)
+                except ValueError:
+                    pass
+
+        # room cleared?
+        prev_cleared = self.room_cleared
+        self.room_cleared = len(self.current_enemies) == 0
+
+        room = self.floor.get_current_room()
+
+        if self.room_cleared and room.type == "boss":
+            if self.current_floor < MAX_FLOORS:
+                self.current_floor += 1
+                self.notice_text = f"Floor {self.current_floor}"
+                self.notice_timer = 2.5
+
+                self.floor = Floor(self.current_floor)
+                self.player.sprite.center_x = SCREEN_WIDTH // 2
+                self.player.sprite.center_y = 120
+                self.load_current_room()
             else:
-                # Возвращаемся к выбору этажа
-                floor_view = FloorSelectionView()
-                floor_view.setup()
-                self.window.show_view(floor_view)
-    
+                self.notice_text = "YOU WIN!"
+                self.notice_timer = 999
+
+        # if we have newly cleared a normal room (not start/boss/treasure), maybe drop a key
+        room = self.floor.get_current_room()
+        if self.room_cleared and (not prev_cleared):
+            # newly cleared
+            if room.type not in ('start', 'boss', 'treasure'):
+                if random.random() < KEY_DROP_CHANCE:
+                    # spawn a key pickup
+                    kx, ky = self.find_free_position()
+                    key_sprite = arcade.SpriteSolidColor(24, 18, arcade.color.GOLD)
+                    key_sprite.center_x = kx
+                    key_sprite.center_y = ky
+                    key_sprite.pickup_type = "key"
+                    self.pickup_sprites.append(key_sprite)
+                    self.notice_text = "A key dropped!"
+                    self.notice_timer = 2.0
+
+        # notice timer
+        if self.notice_timer > 0:
+            self.notice_timer -= dt
+            if self.notice_timer <= 0:
+                self.notice_text = ""
+
+        # if player died -> reset floor
+        if self.player.hp <= 0:
+            # пересоздаём этаж
+            self.current_floor = 1
+            self.floor = Floor(self.current_floor)
+            self.floor.current_pos = self.floor.start_pos
+
+            # пересоздаём игрока
+            self.player = Player(SCREEN_WIDTH // 2, 120)
+            self.player_list.clear()
+            self.player_list.append(self.player.sprite)
+
+            # загружаем стартовую комнату
+            self.load_current_room()
+            return
+        
+
+    # ----------------------
+    # input
+    # ----------------------
     def on_key_press(self, key, modifiers):
+        # add to held keys
         self.keys_held.add(key)
 
-        # АТАКА
+        if key == arcade.key.LSHIFT:
+            if self.player.dash_cooldown <= 0:
+                dx = dy = 0
+                if arcade.key.W in self.keys_held:
+                    dy += 1
+                if arcade.key.S in self.keys_held:
+                    dy -= 1
+                if arcade.key.A in self.keys_held:
+                    dx -= 1
+                if arcade.key.D in self.keys_held:
+                    dx += 1
+
+                if dx != 0 or dy != 0:
+                    length = math.hypot(dx, dy)
+                    self.player.dash_dx = dx / length
+                    self.player.dash_dy = dy / length
+
+                    self.player.dash_time = self.player.dash_duration
+                    self.player.dash_cooldown = self.player.dash_cd_time
+
+        if key == arcade.key.SPACE:
+            self.try_activate_shield()
+
+        # attack handling depends on weapon
         if key in (arcade.key.UP, arcade.key.DOWN, arcade.key.LEFT, arcade.key.RIGHT):
-            if not self.player.can_attack():
+            # if currently axe -> circular AoE around player
+            if self.player.weapon == "axe":
+                if not self.player.can_attack():
+                    return
+                self.player.reset_attack()
+                # create axe swing
+                swing = {"x": self.player.x, "y": self.player.y, "radius": 120, "time": 0.18, "damage": 70, "applied": False}
+                self.axe_swings.append(swing)
+            # if bow -> spawn projectile arrow in that direction
+            elif self.player.weapon == "halberd":
+                if not self.player.can_attack():
+                    return
+
+                self.player.attack_cooldown = HALBERD_COOLDOWN
+                self.player.reset_attack()
+
+                # направление
+                if key == arcade.key.UP:
+                    angle = 90
+                elif key == arcade.key.DOWN:
+                    angle = -90
+                elif key == arcade.key.LEFT:
+                    angle = 180
+                else:
+                    angle = 0
+
+                swing = {
+                    "x": self.player.x,
+                    "y": self.player.y,
+                    "angle": angle,
+                    "radius": HALBERD_RADIUS,
+                    "arc": HALBERD_ARC_ANGLE,
+                    "time": HALBERD_TIME,
+                    "damage": HALBERD_DAMAGE,
+                    "applied": False
+                }
+
+                self.halberd_swings.append(swing)
+                return
+            
+            if self.player.weapon == "hammer":
+                if not self.player.can_attack():
+                    return
+
+                self.player.attack_cooldown = HAMMER_COOLDOWN
+                self.player.reset_attack()
+
+                if key == arcade.key.UP:
+                    angle = 90
+                elif key == arcade.key.DOWN:
+                    angle = -90
+                elif key == arcade.key.LEFT:
+                    angle = 180
+                else:
+                    angle = 0
+
+                swing = {
+                    "x": self.player.x,
+                "y": self.player.y,
+                "radius": HAMMER_RADIUS,
+                "timer": HAMMER_WINDUP + HAMMER_IMPACT,
+                "phase": "windup",
+                "damage": HAMMER_DAMAGE,
+                "applied": False
+                }   
+
+                self.hammer_swings.append(swing)
                 return
 
-            self.player.attack_timer = self.player.attack_cooldown
+            elif self.player.weapon == "bow":
+                if not self.player.can_attack():
+                    return
+                self.player.reset_attack()
+                # spawn arrow sprite
+                arrow = arcade.Sprite("assets/arrow.png", scale=5)
 
-            reach = 55  # Уменьшено
-            half_w = 36  # Уменьшено
-            half_h = 36  # Уменьшено
-
-            hx = self.player.x
-            hy = self.player.y
-
-            if key == arcade.key.UP:
-                hy += reach
-            elif key == arcade.key.DOWN:
-                hy -= reach
-            elif key == arcade.key.LEFT:
-                hx -= reach
-            elif key == arcade.key.RIGHT:
-                hx += reach
-
-            for e in list(self.current_enemies):
-                if abs(e.x - hx) < half_w and abs(e.y - hy) < half_h:
-                    e.hp -= 30
-
-            # Визуализация удара
-            if key == arcade.key.UP:
-                line = (self.player.x - 50, self.player.y + 32,  # Уменьшено
-                        self.player.x + 50, self.player.y + 32)
-            elif key == arcade.key.DOWN:
-                line = (self.player.x - 50, self.player.y - 32,  # Уменьшено
-                        self.player.x + 50, self.player.y - 32)
-            elif key == arcade.key.LEFT:
-                line = (self.player.x - 50, self.player.y - 32,  # Уменьшено
-                        self.player.x - 50, self.player.y + 32)
+                arrow.center_x = self.player.x
+                arrow.center_y = self.player.y
+                # direction vector
+                dx = dy = 0
+                if key == arcade.key.UP:
+                    dy = 1
+                elif key == arcade.key.DOWN:
+                    dy = -1
+                elif key == arcade.key.LEFT:
+                    dx = -1
+                elif key == arcade.key.RIGHT:
+                    dx = 1
+                length = math.hypot(dx, dy)
+                if length == 0:
+                    length = 1
+                dx /= length
+                dy /= length
+                arrow.change_x = dx * ARROW_SPEED
+                arrow.change_y = dy * ARROW_SPEED
+                arrow.angle = math.degrees(math.atan2(dy, dx))
+                arrow.damage = 45
+                self.projectile_sprites.append(arrow)
             else:
-                line = (self.player.x + 50, self.player.y - 32,  # Уменьшено
-                        self.player.x + 50, self.player.y + 32)
+                # default sword behaviour (directional slash)
+                if not self.player.can_attack():
+                    return
+                self.player.reset_attack()
 
-            self.sword_slashes.append({
-                "x1": line[0],
-                "y1": line[1],
-                "x2": line[2],
-                "y2": line[3],
-                "time": 0.12
-            })
+                x1 = self.player.x
+                y1 = self.player.y
+                x2 = x1
+                y2 = y1
+                L = SWORD_LENGTH
+                if key == arcade.key.UP:
+                    y2 += L
+                elif key == arcade.key.DOWN:
+                    y2 -= L
+                elif key == arcade.key.LEFT:
+                    x2 -= L
+                elif key == arcade.key.RIGHT:
+                    x2 += L
 
-        # ВЗАИМОДЕЙСТВИЕ С ДВЕРЬЮ
-        if key == arcade.key.E and self.door_open:
-            # Проверяем столкновение с дверьми
-            for door in self.door_sprites:
+                # visual slash
+                self.slashes.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2, "time": SWORD_TIME, "width": SWORD_THICKNESS})
+
+                # damage enemies in area near endpoint
+                for e in list(self.current_enemies):
+                    if abs(e.x - x2) < 48 and abs(e.y - y2) < 48:
+                        e.hp -= 40
+
+
+        # interact with doors when cleared (or allow entering start room)
+        if key == arcade.key.E:
+            room = self.floor.get_current_room()
+            for door in list(self.door_sprites):
                 if arcade.check_for_collision(self.player.sprite, door):
-                    if self.floor.move(door.direction):
-                        self._load_current_room()
-                    break
+                    target = self.floor.get_current_room().doors.get(door.direction)
+                    if not target:
+                        continue
+                    target_room = self.floor.rooms.get(target)
+                    # if target is treasure and locked -> require key
+                    if target_room and target_room.type == "treasure" and (not target_room.treasure_unlocked):
+                        if self.player.keys > 0:
+                            self.player.keys -= 1
+                            target_room.treasure_unlocked = True
+                            self.notice_text = "Unlocked treasure room!"
+                            self.notice_timer = 2.0
+                            # move into room
+                            if self.floor.move(target):
+                                self.load_current_room()
+                        else:
+                            self.notice_text = "Door is locked. Need a key."
+                            self.notice_timer = 2.0
+                        break
+                    else:
+                        # normal move
+                        if self.floor.move(target):
+                            self.load_current_room()
+                        break
 
-        # КЛАВИША ОБУЧЕНИЯ
-        if key == arcade.key.F1:
-            tutorial_view = TutorialView(self)
-            tutorial_view.setup()
-            self.window.show_view(tutorial_view)
-
-        # ВЫХОД В МЕНЮ
         if key == arcade.key.ESCAPE:
-            menu_view = MainMenuView()
-            menu_view.setup()
-            self.window.show_view(menu_view)
-    
-    def on_mouse_press(self, x, y, button, modifiers):
-        tutorial_button_x = SCREEN_WIDTH - 80  # Обновлено
-        tutorial_button_y = SCREEN_HEIGHT - 25  # Обновлено
-        distance = math.sqrt((x - tutorial_button_x) ** 2 + (y - tutorial_button_y) ** 2)
-        
-        if distance <= 16:  # Обновлено
-            tutorial_view = TutorialView(self)
-            tutorial_view.setup()
-            self.window.show_view(tutorial_view)
-    
+            arcade.close_window()
+
+        # debug: R to regenerate floor
+        if key == arcade.key.R:
+            self.floor = Floor()
+            self.current_pos = self.floor.current_pos
+            self.load_current_room()
+
+           
     def on_key_release(self, key, modifiers):
-        self.keys_held.discard(key)
+        if key in self.keys_held:
+            self.keys_held.discard(key)
 
-
-# ============== ГЛАВНОЕ ОКНО ==============
-class GameWindow(arcade.Window):
-    def __init__(self):
-        # ИЗМЕНЕНО: Используем оконный режим 1024x768 вместо полноэкранного
-        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE, fullscreen=False)
-        arcade.set_background_color((0, 0, 0))
-    
-    def setup(self):
-        menu_view = MainMenuView()
-        menu_view.setup()
-        self.show_view(menu_view)
-
-
-# ============== ЗАПУСК ==============
+# ====================== MAIN ======================
 def main():
     window = GameWindow()
-    window.setup()
     arcade.run()
 
 if __name__ == "__main__":
