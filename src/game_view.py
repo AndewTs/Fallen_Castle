@@ -1612,29 +1612,29 @@ class GameView(arcade.View):
                 self.enemy_sprites.append(e.sprite)
 
         if room.type == RoomType.TREASURE and room.treasure_unlocked:
-            ax = arcade.SpriteSolidColor(28, 28, arcade.color.DARK_ORANGE)
+            ax = arcade.Sprite("assets/axe.png", scale=5)
             ax.center_x, ax.center_y = self.find_free_position()
             ax.pickup_type = "axe"
             self.pickup_sprites.append(ax)
 
-            bw = arcade.SpriteSolidColor(28, 28, arcade.color.DARK_GREEN)
+            bw = arcade.Sprite("assets/bow).png", scale=5)
             bw.center_x, bw.center_y = self.find_free_position()
             bw.pickup_type = "bow"
             self.pickup_sprites.append(bw)
 
             if self.floor_number >= 2:
-                shield = arcade.SpriteSolidColor(28, 28, arcade.color.BLUE)
+                shield = arcade.Sprite("assets/shield.png", scale=5)
                 shield.center_x, shield.center_y = self.find_free_position()
                 shield.pickup_type = "shield"
                 self.pickup_sprites.append(shield)
 
-                halberd = arcade.SpriteSolidColor(32, 32, arcade.color.LIGHT_BLUE)
+                halberd = arcade.Sprite("assets/halberd.png", scale=5)
                 halberd.center_x, halberd.center_y = self.find_free_position()
                 halberd.pickup_type = "halberd"
                 self.pickup_sprites.append(halberd)
 
                 if random.random() > 0.8:
-                    hm = arcade.SpriteSolidColor(32, 32, arcade.color.GRAY)
+                    hm = arcade.Sprite("assets/hammer.png", scale=5)
                     hm.center_x, hm.center_y = self.find_free_position()
                     hm.pickup_type = "hammer"
                     self.pickup_sprites.append(hm)
@@ -1659,7 +1659,7 @@ class GameView(arcade.View):
             x = random.randint(min_x, max_x)
             y = random.randint(min_y, max_y)
 
-            dummy = arcade.SpriteSolidColor(32, 32, arcade.color.RED)
+            dummy = arcade.SpriteSolidColor(86, 86, arcade.color.RED)
             dummy.center_x = x
             dummy.center_y = y
 
@@ -2132,7 +2132,7 @@ class GameView(arcade.View):
             if room.type not in (RoomType.START, RoomType.BOSS, RoomType.TREASURE, RoomType.WEAPON, RoomType.SHIELD):
                 if random.random() < KEY_DROP_CHANCE:
                     kx, ky = self.find_free_position()
-                    key_sprite = arcade.SpriteSolidColor(24, 18, arcade.color.GOLD)
+                    key_sprite = arcade.Sprite("assets/key.png", scale=5)
                     key_sprite.center_x = kx
                     key_sprite.center_y = ky
                     key_sprite.pickup_type = "key"

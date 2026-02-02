@@ -24,7 +24,7 @@
         "MAX_FLOORS":3,
         "BASE_FLOOR_SIZE":3,
         "ROOM_GRID_SIZE":3,
-        "KEY_DROP_CHANCE":1,
+        "KEY_DROP_CHANCE":0.25,
         "WALL_TILE":64
     },
     "weapons": {
