@@ -1,0 +1,51 @@
+{
+    "screen": {
+        "SCREEN_WIDTH":1280,
+        "SCREEN_HEIGHT":720,
+        "SCREEN_TITLE":"Fallen Castle"
+    },
+    "player": {
+        "PLAYER_SPEED":320,
+        "PLAYER_HP":100,
+        "PLAYER_SCALE":7
+    },
+    "enemy": {
+        "ENEMY_SCALE":6,
+        "ENEMY_HP":40,
+        "ENEMY_SPEED":140
+    },
+    "boss": {
+        "BOSS_SCALE":0.09,
+        "BOSS_HP":1000,
+        "BOSS_SPEED":110
+    },
+    "pixel":4,
+    "floor": {
+        "MAX_FLOORS":3,
+        "BASE_FLOOR_SIZE":3,
+        "ROOM_GRID_SIZE":3,
+        "KEY_DROP_CHANCE":1,
+        "WALL_TILE":64
+    },
+    "weapons": {
+        "HALBERD_RADIUS":200,
+        "HALBERD_ARC_ANGLE":65,
+        "HALBERD_DAMAGE":100,
+        "HALBERD_TIME":0.22,
+        "HALBERD_COOLDOWN":0.45,
+        "HAMMER_RADIUS":140,
+        "HAMMER_DAMAGE":180,
+        "HAMMER_TIME":0.18,
+        "HAMMER_COOLDOWN" : 0.75,
+        "HAMMER_WINDUP" : 0.25,
+        "HAMMER_IMPACT" : 0.15,
+        "HAMMER_SHAKE" : 8,
+        "HAMMER_STUN_TIME" : 1.2,
+        "HAMMER_BOSS_SLOW_MULT" : 0.5,
+        "HAMMER_BOSS_SLOW_TIME" : 2.5,
+        "SWORD_LENGTH" : 112,
+        "SWORD_THICKNESS" : 5,
+        "SWORD_TIME" : 0.12,
+        "ARROW_SPEED" : 700.0
+    }
+}

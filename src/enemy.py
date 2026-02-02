@@ -7,7 +7,6 @@ from src.settings import ENEMY_SCALE, ENEMY_HP, ENEMY_SPEED, ARROW_SPEED
 
 class Enemy:
     def __init__(self, x, y, hp=None, speed=None):
-        # try asset
         self.stunned = False
         self.stun_timer = 0.0
         try:
@@ -38,7 +37,6 @@ class Enemy:
             if self.stun_timer <= 0:
                 self.stunned = False
             return
-        # simple seek AI
         dx = player.x - self.x
         dy = player.y - self.y
         dist = math.hypot(dx, dy)
@@ -46,48 +44,45 @@ class Enemy:
             vx = dx / dist * self.speed * dt
             vy = dy / dist * self.speed * dt
 
-            # move x and check collision
             old_x = self.sprite.center_x
             self.sprite.center_x += vx
             if arcade.check_for_collision_with_list(self.sprite, walls):
                 self.sprite.center_x = old_x
 
-            # move y and check collision
             old_y = self.sprite.center_y
             self.sprite.center_y += vy
             if arcade.check_for_collision_with_list(self.sprite, walls):
                 self.sprite.center_y = old_y
 
-            # flip sprite
             if dx > 0:
                 self.sprite.scale_x = abs(self.sprite.scale_x)
             else:
                 self.sprite.scale_x = -abs(self.sprite.scale_x)
 
-    @staticmethod
-    def random_spawn(margin_x=200, margin_y=150):
-        x = random.randint(margin_x, 1280 - margin_x)
-        y = random.randint(margin_y, 720 - margin_y)
-        return Enemy(x, y)
-
 class FastEnemy(Enemy):
     def __init__(self, x, y):
         super().__init__(x, y, hp=25, speed=260)
-        self.sprite.texture = arcade.load_texture("assets/enemy_fast.png")
-
+        try:
+            self.sprite.texture = arcade.load_texture("assets/enemy_fast.png")
+        except:
+            pass
 
 class TankEnemy(Enemy):
     def __init__(self, x, y):
         super().__init__(x, y, hp=140, speed=70)
-        self.sprite.texture = arcade.load_texture("assets/enemy_tank.png")
-
+        try:
+            self.sprite.texture = arcade.load_texture("assets/enemy_tank.png")
+        except:
+            pass
 
 class RangedEnemy(Enemy):
     def __init__(self, x, y):
         super().__init__(x, y, hp=40, speed=80)
-        self.sprite.texture = arcade.load_texture("assets/enemy_ranged.png")
+        try:
+            self.sprite.texture = arcade.load_texture("assets/enemy_ranged.png")
+        except:
+            pass
         self.shoot_cd = 1.5
-        self.timer = 0
         self.timer = random.uniform(0.3, 1.2)
     
     def try_shoot(self, player, projectile_list):
@@ -103,7 +98,10 @@ class RangedEnemy(Enemy):
         dx /= dist
         dy /= dist
 
-        arrow = arcade.Sprite("assets/arrow.png", scale=5)
+        try:
+            arrow = arcade.Sprite("assets/arrow.png", scale=5)
+        except:
+            arrow = arcade.SpriteSolidColor(10, 10, arcade.color.YELLOW)
         arrow.center_x = self.x + dx * 36
         arrow.center_y = self.y + dy * 36
 
@@ -111,7 +109,7 @@ class RangedEnemy(Enemy):
         arrow.change_y = dy * ARROW_SPEED
         arrow.angle = math.degrees(math.atan2(dx, dy))
 
-        arrow.damage = 1
+        arrow.damage = 15
         arrow.from_enemy = True
         arrow.time_alive = 0
 
@@ -126,7 +124,6 @@ class RangedEnemy(Enemy):
         dy = player.y - self.y
         dist = math.hypot(dx, dy)
 
-        # держит дистанцию
         if dist < 220:
             vx = -dx / dist * self.speed * dt
             vy = -dy / dist * self.speed * dt
@@ -146,7 +143,6 @@ class RangedEnemy(Enemy):
         if arcade.check_for_collision_with_list(self.sprite, walls):
             self.sprite.center_y = oy
 
-
 class EliteRunner(FastEnemy):
     def __init__(self, x, y):
         super().__init__(x, y)
@@ -155,8 +151,7 @@ class EliteRunner(FastEnemy):
         self.is_dashing = False
         self.dash_dir = (0, 0)
         self.dash_speed = 900
-
-        self.hp = 45  # чуть жирнее обычного бегуна
+        self.hp = 45
 
     def update(self, player, walls, dt):
         if self.stunned:
@@ -170,7 +165,6 @@ class EliteRunner(FastEnemy):
         dy = player.y - self.y
         dist = math.hypot(dx, dy)
 
-        # старт рывка
         if not self.is_dashing and self.dash_cd <= 0 and dist > 60:
             self.is_dashing = True
             self.dash_timer = 0.25
@@ -198,11 +192,9 @@ class EliteRunner(FastEnemy):
             if self.dash_timer <= 0:
                 self.is_dashing = False
         else:
-            # обычное поведение бегуна
             super().update(player, walls, dt)
         
         self.sprite.color = arcade.color.PURPLE_HEART
-
 
 class EliteShooter(Enemy):
     def __init__(self, x, y):
@@ -222,7 +214,6 @@ class EliteShooter(Enemy):
         dy = player.y - self.y
         dist = math.hypot(dx, dy)
 
-        # движение — просто идёт на игрока
         if dist > 1:
             vx = dx / dist * self.speed * dt
             vy = dy / dist * self.speed * dt
@@ -237,15 +228,17 @@ class EliteShooter(Enemy):
             if arcade.check_for_collision_with_list(self.sprite, walls):
                 self.sprite.center_y = oy
 
-        # стрельба
         if self.timer <= 0 and dist < 520:
             dx /= max(dist, 1)
             dy /= max(dist, 1)
 
-            arrow = arcade.Sprite("assets/arrow.png", scale=4)
+            try:
+                arrow = arcade.Sprite("assets/arrow.png", scale=4)
+            except:
+                arrow = arcade.SpriteSolidColor(10, 10, arcade.color.YELLOW)
             arrow.center_x = self.x
             arrow.center_y = self.y
-            arrow.change_x = dx * 200   # медленная стрела
+            arrow.change_x = dx * 200
             arrow.change_y = dy * 200
             arrow.damage = 12
             arrow.from_enemy = True
@@ -255,23 +248,19 @@ class EliteShooter(Enemy):
         
         self.sprite.color = arcade.color.PURPLE_HEART
 
-
 class EliteTankFloor3(TankEnemy):
     def __init__(self, x, y):
         super().__init__(x, y)
         self.hp = 260
         self.speed = 55
-
         self.slam_cd = random.uniform(2.5, 4.0)
         self.slam_timer = 0.0
         self.slam_radius = 140
         self.slam_damage = 35
         self.slow_duration = 2.5
-
         self.is_slamming = False
-        self.warn_time = 0.6  # визуальное предупреждение
+        self.warn_time = 0.6
         self.warn_timer = 0.0
-
         self.sprite.color = arcade.color.DARK_RED
 
     def update(self, player, walls, dt):
@@ -286,26 +275,20 @@ class EliteTankFloor3(TankEnemy):
         dy = player.y - self.y
         dist = math.hypot(dx, dy)
 
-        # ───── START SLAM ─────
         if not self.is_slamming and self.slam_timer <= 0 and dist < 220:
             self.is_slamming = True
             self.warn_timer = self.warn_time
             self.slam_timer = random.uniform(3.0, 4.5)
 
-        # ───── SLAM WARNING ─────
         if self.is_slamming:
             self.warn_timer -= dt
-
             if self.warn_timer <= 0:
-                # APPLY SLAM
                 if dist <= self.slam_radius:
                     player.hp -= self.slam_damage
                     player.slow_timer = max(player.slow_timer, self.slow_duration)
-
                 self.is_slamming = False
-            return  # во время удара не двигается
+            return
 
-        # ───── NORMAL MOVE ─────
         if dist > 60:
             vx = dx / dist * self.speed * dt
             vy = dy / dist * self.speed * dt
@@ -320,7 +303,6 @@ class EliteTankFloor3(TankEnemy):
             if arcade.check_for_collision_with_list(self.sprite, walls):
                 self.sprite.center_y = oy
 
-        # flip
         if dx > 0:
             self.sprite.scale_x = abs(self.sprite.scale_x)
         else:
@@ -328,20 +310,16 @@ class EliteTankFloor3(TankEnemy):
 
         self.sprite.color = arcade.color.PURPLE_HEART
 
-
 class EliteArcherFloor3(RangedEnemy):
     def __init__(self, x, y):
         super().__init__(x, y)
-
         self.volley_cooldown = random.uniform(3.0, 4.5)
         self.volley_timer = self.volley_cooldown
-
         self.in_volley = False
         self.volley_count = 0
         self.max_volley = random.randint(3, 5)
         self.volley_interval = 0.3
         self.volley_interval_timer = 0.0
-
         self.sprite.color = arcade.color.PURPLE_HEART
 
     def update(self, player, walls, dt, projectile_list):
@@ -354,7 +332,6 @@ class EliteArcherFloor3(RangedEnemy):
         dy = player.y - self.y
         dist = math.hypot(dx, dy)
 
-        # ───── движение (просто идёт на игрока) ─────
         if not self.in_volley and dist > 120:
             vx = dx / max(dist, 1) * self.speed * dt
             vy = dy / max(dist, 1) * self.speed * dt
@@ -369,7 +346,6 @@ class EliteArcherFloor3(RangedEnemy):
             if arcade.check_for_collision_with_list(self.sprite, walls):
                 self.sprite.center_y = oy
 
-        # ───── логика залпа ─────
         self.volley_timer -= dt
 
         if not self.in_volley and self.volley_timer <= 0 and dist < 600:
@@ -380,41 +356,35 @@ class EliteArcherFloor3(RangedEnemy):
 
         if self.in_volley:
             self.volley_interval_timer -= dt
-
             if self.volley_interval_timer <= 0:
                 self.fire_arrow(player, projectile_list)
                 self.volley_count += 1
                 self.volley_interval_timer = self.volley_interval
-
                 if self.volley_count >= self.max_volley:
                     self.in_volley = False
                     self.volley_timer = self.volley_cooldown
 
-        # ───── флип спрайта ─────
         if dx > 0:
             self.sprite.scale_x = abs(self.sprite.scale_x)
         else:
             self.sprite.scale_x = -abs(self.sprite.scale_x)
 
-        self.sprite.color = arcade.color.PURPLE_HEART
-
     def fire_arrow(self, player, projectile_list):
         dx = player.x - self.x
         dy = player.y - self.y
         dist = math.hypot(dx, dy)
-
         dx /= max(dist, 1)
         dy /= max(dist, 1)
 
-        arrow = arcade.Sprite("assets/arrow.png", scale=4)
+        try:
+            arrow = arcade.Sprite("assets/arrow.png", scale=4)
+        except:
+            arrow = arcade.SpriteSolidColor(10, 10, arcade.color.YELLOW)
         arrow.center_x = self.x
         arrow.center_y = self.y
-
         arrow.change_x = dx * 650
         arrow.change_y = dy * 650
         arrow.angle = math.degrees(math.atan2(dy, dx))
-
         arrow.damage = 14
         arrow.from_enemy = True
-
         projectile_list.append(arrow)

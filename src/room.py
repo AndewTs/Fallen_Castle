@@ -1,33 +1,31 @@
 import random
+from src.settings import SCREEN_HEIGHT, SCREEN_WIDTH, RoomType
+
 
 class Room:
     def __init__(self, pos, room_type="normal"):
-        """
-        pos: (x, y) tuple
-        room_type: "start", "normal", "boss", "treasure"
-        """
         self.pos = pos
         self.type = room_type
-        self.doors = {}  # filled by Floor: {"up": (x,y), ...}
-        self.enemy_spawns = []  # list of dicts {"type":"enemy","x":int,"y":int}
-        self.walls = []  # optional positions of obstacles (not sprites)
-        self.forbidden_zones = []  # list of (x,y,radius)
-        self.treasure_unlocked = False  # for treasure rooms
+        self.doors = {}
+        self.enemy_spawns = []
+        self.walls = []
+        self.forbidden_zones = []
+        self.treasure_unlocked = False
+        self.guaranteed_item = None  # Добавляем гарантированный предмет
+        self.item_spawned = False  # Флаг, что предмет уже размещен
 
-        # enemy count by type
-        if self.type == "start":
+        if self.type == RoomType.START:
             cnt = 0
-        elif self.type == "boss":
+        elif self.type == RoomType.BOSS:
             cnt = 0
-        elif self.type == "treasure":
+        elif self.type == RoomType.TREASURE:
             cnt = 0
         else:
             cnt = random.randint(2, 4)
 
-        # generate spawns (positions will be used when loading)
         for _ in range(cnt):
-            ex = random.randint(200, 1080)
-            ey = random.randint(220, 620)
+            ex = random.randint(200, SCREEN_WIDTH - 200)
+            ey = random.randint(220, SCREEN_HEIGHT - 100)
             self.enemy_spawns.append({"type": "enemy", "x": ex, "y": ey, "hp": None})
 
     def set_doors(self, doors_dict):
